@@ -89,36 +89,37 @@ export default function HomePage() {
   )
 }
 
-function Card({ title, value }) {
+// ✅ Typed Card
+type CardProps = {
+  title: string
+  value: string | number
+}
+
+function Card({ title, value }: CardProps) {
   return (
     <div className="rounded-2xl bg-slate-50 p-5">
-      <p className="text-sm text-slate-500">
-        {title}
-      </p>
-
-      <p className="mt-2 text-2xl font-bold text-slate-900">
-        {value}
-      </p>
+      <p className="text-sm text-slate-500">{title}</p>
+      <p className="mt-2 text-2xl font-bold text-slate-900">{value}</p>
     </div>
   )
 }
 
-function Row({ client, hours, amount }) {
+// ✅ Typed Row (THIS WAS YOUR ERROR)
+type RowProps = {
+  client: string
+  hours: string
+  amount: string
+}
+
+function Row({ client, hours, amount }: RowProps) {
   return (
     <div className="px-4 py-3 flex items-center justify-between text-sm">
       <div>
-        <p className="font-medium text-slate-900">
-          {client}
-        </p>
-
-        <p className="text-slate-500">
-          {hours}
-        </p>
+        <p className="font-medium text-slate-900">{client}</p>
+        <p className="text-slate-500">{hours}</p>
       </div>
 
-      <p className="font-semibold text-slate-900">
-        {amount}
-      </p>
+      <p className="font-semibold text-slate-900">{amount}</p>
     </div>
   )
 }
