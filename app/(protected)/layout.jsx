@@ -1,66 +1,76 @@
-'use client'
+"use client";
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
-import AppNavbar from '@/components/AppNavbar'
+import { useState } from "react";
+import Sidebar from "@/components/layout/Sidebar";
+import Topbar from "@/components/layout/Topbar";
+import AppProvider from "@/components/providers/AppProvider";
+import { Menu, X } from "lucide-react";
 
 export default function ProtectedLayout({ children }) {
-  const router = useRouter()
-
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    checkSession()
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        setUser(null)
-        router.push('/login')
-        return
-      }
-
-      setUser(session.user)
-      setLoading(false)
-    })
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  const checkSession = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    if (!session) {
-      router.push('/login')
-      return
-    }
-
-    setUser(session.user)
-    setLoading(false)
-  }
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-slate-500">
-          Loading...
-        </div>
-      </div>
-    )
-  }
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <AppNavbar user={user} />
+    <AppProvider>
+      <div className="min-h-screen bg-slate-50">
+        {/* MOBILE OVERLAY */}
+        {sidebarOpen && (
+          <div
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+          />
+        )}
 
-      {children}
-    </div>
-  )
+        {/* DESKTOP SIDEBAR */}
+        <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-50 lg:block lg:w-64">
+          <Sidebar />
+        </div>
+
+        {/* MOBILE SIDEBAR */}
+        <div
+          className={`fixed inset-y-0 left-0 z-50 w-64 transform bg-white transition-transform duration-300 lg:hidden ${
+            sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <div className="absolute right-3 top-3">
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <Sidebar />
+        </div>
+
+        {/* MAIN CONTENT */}
+        <div className="lg:pl-64">
+          {/* MOBILE TOP BAR */}
+          <div className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white px-4 lg:hidden">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+            >
+              <Menu size={22} />
+            </button>
+
+            <div>
+              <p className="text-sm font-bold text-indigo-600">VA System</p>
+              <p className="text-xs text-slate-500">Workspace</p>
+            </div>
+          </div>
+
+          {/* DESKTOP TOPBAR */}
+          <div className="hidden lg:block">
+            <Topbar />
+          </div>
+
+          {/* PAGE */}
+          <main className="min-h-[calc(100vh-4rem)] overflow-x-hidden p-4 sm:p-6 lg:p-8">
+            {children}
+          </main>
+        </div>
+      </div>
+    </AppProvider>
+  );
 }

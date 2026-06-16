@@ -1,5 +1,5 @@
 {
-  "name": "vasystem",
+  "name": "booking-saas",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -19,7 +19,7 @@
     "react-day-picker": "^10.0.0",
     "react-dom": "19.2.4",
     "react-hook-form": "^7.75.0",
-    "resend": "^6.12.4"
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

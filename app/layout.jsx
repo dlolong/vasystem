@@ -1,7 +1,7 @@
 import './globals.css'
 import { AppProvider } from '@/context/AppContext'
 // import Navbar from '@/components/Navbar'
-import Toast from '@/components/Toast'
+import Toast from '@/components/ui/Toast'
 
 export const metadata = {
   title: 'VA System',

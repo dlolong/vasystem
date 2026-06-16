@@ -1,42 +1,47 @@
-'use client'
+"use client";
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 
 export default function PublicInvoicePage() {
-  const params = useParams()
+  const params = useParams();
+  const token = params?.token;
 
-  const [invoice, setInvoice] = useState(null)
-  const [items, setItems] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [errorMessage, setErrorMessage] = useState('')
+  const [invoice, setInvoice] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
-    loadInvoice()
-  }, [])
+    if (!token) return;
 
-  const loadInvoice = async () => {
+    loadInvoice(token);
+  }, [token]);
+
+  const loadInvoice = async (invoiceToken) => {
     try {
-      const response = await fetch(`/api/public-invoice/${params.token}`, {
-        method: 'GET',
-      })
+      setLoading(true);
 
-      const result = await response.json()
+      const response = await fetch(`/api/public-invoice/${invoiceToken}`, {
+        method: "GET",
+      });
+
+      const result = await response.json();
 
       if (!response.ok) {
-        setErrorMessage(result.error || 'Invoice not found.')
-        setLoading(false)
-        return
+        setErrorMessage(result.error || "Invoice not found.");
+        setLoading(false);
+        return;
       }
 
-      setInvoice(result.invoice)
-      setItems(result.items || [])
-      setLoading(false)
+      setInvoice(result.invoice);
+      setItems(result.items || []);
+      setLoading(false);
     } catch (error) {
-      setErrorMessage(error.message || 'Something went wrong.')
-      setLoading(false)
+      setErrorMessage(error.message || "Something went wrong.");
+      setLoading(false);
     }
-  }
+  };
 
   const formatCurrency = (amount, currency = 'PHP') => {
     return new Intl.NumberFormat('en-PH', {
