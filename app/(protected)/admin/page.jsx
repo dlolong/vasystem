@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { useApp } from '@/context/AppContext'
+import { useAppContext } from "@/context/AppContext";
 import Loader from '@/components/Loader'
 
 export default function AdminPage() {
-    const { profile, showToast } = useApp()
+    const { profile, showToast } = useAppContext()
 
     const [activeTab, setActiveTab] = useState('leads')
     const [leads, setLeads] = useState([])

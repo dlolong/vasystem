@@ -3,11 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
-import { useApp } from '@/context/AppContext'
+import { useAppContext } from '@/context/AppContext'
 
 export default function ConfirmEmailPage() {
   const router = useRouter()
-  const { showToast, refreshAppData } = useApp()
+  const { showToast, refreshAppData } = useAppContext()
 
   const [status, setStatus] = useState('verifying')
   const [email, setEmail] = useState('')

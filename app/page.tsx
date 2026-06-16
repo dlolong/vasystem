@@ -139,7 +139,14 @@ export default function HomePage() {
   );
 }
 
-function Stat({ label, value }) {
+type StatProps = {
+  label: string;
+  value: string;
+};
+
+function Stat(props: StatProps) {
+  const { label, value } = props;
+
   return (
     <div className="rounded-xl bg-slate-50 p-4">
       <p className="text-xs text-slate-500">{label}</p>
@@ -148,7 +155,14 @@ function Stat({ label, value }) {
   );
 }
 
-function Feature({ title, description }) {
+type FeatureProps = {
+  title: string;
+  description: string;
+};
+
+function Feature(props: FeatureProps) {
+  const { title, description } = props;
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <h3 className="font-semibold text-slate-900">{title}</h3>
