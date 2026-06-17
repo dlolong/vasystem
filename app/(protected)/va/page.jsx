@@ -1,75 +1,86 @@
-'use client'
+"use client";
 
-import { useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
-import { X } from 'lucide-react'
-import { supabase } from '@/lib/supabaseClient'
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CalendarDays,
+  Clock,
+  FileText,
+  Plus,
+  ReceiptText,
+  TimerReset,
+  Users,
+  Wallet,
+} from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
-import AddClientDialog from "@/components/va/AddClientDialog";
+import AddClientDialog from "@/components/AddClientDialog";
 import AddTimeDialog from "@/components/va/AddTimeDialog";
+import { formatMoney } from "@/lib/currency";
 
 export default function DashboardPage() {
-  const intervalRef = useRef(null)
+  const intervalRef = useRef(null);
 
-  const [user, setUser] = useState(null)
-  const [clients, setClients] = useState([])
+  const { showToast } = useAppContext();
 
-  const { showToast } = useAppContext()
-  const [showClientDialog, setShowClientDialog] = useState(false)
-  const [showTimeDialog, setShowTimeDialog] = useState(false)
+  const [user, setUser] = useState(null);
+  const [organizationId, setOrganizationId] = useState(null);
+  const [clients, setClients] = useState([]);
 
-  const [clientForm, setClientForm] = useState({
-    name: '',
-    email: '',
-    hourly_rate: '',
-  })
+  const [showClientDialog, setShowClientDialog] = useState(false);
+  const [showTimeDialog, setShowTimeDialog] = useState(false);
 
   const [stats, setStats] = useState({
     totalHours: 0,
-    billableAmount: 0,
+    billableTotals: {},
+    unpaidInvoiceTotals: {},
+    uninvoicedTotals: {},
     unpaidInvoices: 0,
+    uninvoicedLogs: 0,
     activeClients: 0,
-  })
+  });
 
-  const [recentEntries, setRecentEntries] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [recentEntries, setRecentEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [activeTimerId, setActiveTimerId] = useState(null)
-  const [timerStatus, setTimerStatus] = useState('idle') // idle, running, paused
-  const [elapsedSeconds, setElapsedSeconds] = useState(0)
-  const [timerStartDate, setTimerStartDate] = useState(null)
-  const [timerError, setTimerError] = useState('')
-  const [timerSuccess, setTimerSuccess] = useState('')
+  const [activeTimerId, setActiveTimerId] = useState(null);
+  const [timerStatus, setTimerStatus] = useState("idle");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [timerStartDate, setTimerStartDate] = useState(null);
+  const [timerError, setTimerError] = useState("");
+  const [timerSuccess, setTimerSuccess] = useState("");
 
   const [timerForm, setTimerForm] = useState({
-    client_id: '',
-    description: '',
-  })
+    client_id: "",
+    description: "",
+  });
 
   useEffect(() => {
-    loadDashboard()
+    loadDashboard();
 
     return () => {
-      clearTimerInterval()
-    }
-  }, [])
+      clearTimerInterval();
+    };
+  }, []);
 
   const clearTimerInterval = () => {
     if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
-  }
+  };
 
   const startLocalInterval = () => {
-    clearTimerInterval()
+    clearTimerInterval();
 
     intervalRef.current = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1)
-    }, 1000)
-  }
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+  };
 
   const loadDashboard = async () => {
+    setLoading(true);
+
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -82,14 +93,12 @@ export default function DashboardPage() {
     const currentUser = session.user;
     setUser(currentUser);
 
-    // Get optional users row
     const { data: userRow } = await supabase
       .from("users")
       .select("*")
       .eq("id", currentUser.id)
       .maybeSingle();
 
-    // Get optional agency membership
     const { data: membershipRow } = await supabase
       .from("memberships")
       .select("*")
@@ -97,30 +106,41 @@ export default function DashboardPage() {
       .eq("status", "active")
       .maybeSingle();
 
-    const organizationId =
+    const orgId =
       membershipRow?.organization_id || userRow?.organization_id || null;
 
-    const loadedClients = await loadClients(currentUser.id, organizationId);
+    setOrganizationId(orgId);
+
+    const loadedClients = await loadClients(currentUser.id, orgId);
 
     await Promise.all([
-      loadDashboardData(currentUser.id, organizationId),
+      loadDashboardData(currentUser.id, orgId),
       loadActiveTimer(currentUser.id, loadedClients),
     ]);
 
     setLoading(false);
   };
 
-  const loadClients = async (userId, organizationId = null) => {
+  const loadClients = async (userId, orgId = null) => {
     let query = supabase
       .from("clients")
-      .select("*")
+      .select(
+        `
+        id,
+        name,
+        email,
+        currency,
+        hourly_rate,
+        organization_id,
+        user_id,
+        status
+      `
+      )
       .eq("status", "active")
       .order("name", { ascending: true });
 
-    if (organizationId) {
-      query = query.or(
-        `user_id.eq.${userId},organization_id.eq.${organizationId}`
-      );
+    if (orgId) {
+      query = query.or(`user_id.eq.${userId},organization_id.eq.${orgId}`);
     } else {
       query = query.eq("user_id", userId);
     }
@@ -132,7 +152,11 @@ export default function DashboardPage() {
       return [];
     }
 
-    const activeClients = data || [];
+    const activeClients = (data || []).map((client) => ({
+      ...client,
+      currency: normalizeCurrency(client.currency),
+    }));
+
     setClients(activeClients);
 
     if (activeClients.length > 0) {
@@ -147,274 +171,295 @@ export default function DashboardPage() {
 
   const loadActiveTimer = async (userId, loadedClients = []) => {
     const { data, error } = await supabase
-      .from('active_timers')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle()
+      .from("active_timers")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
 
     if (error) {
-      setTimerError(error.message)
-      return
+      setTimerError(error.message);
+      return;
     }
 
     if (!data) {
-      setActiveTimerId(null)
-      setTimerStatus('idle')
-      setElapsedSeconds(0)
-      clearTimerInterval()
-      return
+      setActiveTimerId(null);
+      setTimerStatus("idle");
+      setElapsedSeconds(0);
+      clearTimerInterval();
+      return;
     }
 
-    setActiveTimerId(data.id)
-    setTimerStatus(data.status)
-    setTimerStartDate(new Date(data.started_at))
+    setActiveTimerId(data.id);
+    setTimerStatus(data.status);
+    setTimerStartDate(new Date(data.started_at));
 
     setTimerForm({
-      client_id:
-        data.client_id ||
-        loadedClients?.[0]?.id ||
-        '',
-      description: data.description || '',
-    })
+      client_id: data.client_id || loadedClients?.[0]?.id || "",
+      description: data.description || "",
+    });
 
-    const calculatedSeconds = calculateElapsedSecondsFromTimer(data)
-    setElapsedSeconds(calculatedSeconds)
+    const calculatedSeconds = calculateElapsedSecondsFromTimer(data);
+    setElapsedSeconds(calculatedSeconds);
 
-    if (data.status === 'running') {
-      startLocalInterval()
+    if (data.status === "running") {
+      startLocalInterval();
     } else {
-      clearTimerInterval()
+      clearTimerInterval();
     }
-  }
+  };
 
   const calculateElapsedSecondsFromTimer = (timer) => {
-    const accumulated = Number(timer.accumulated_seconds || 0)
+    const accumulated = Number(timer.accumulated_seconds || 0);
 
-    if (timer.status === 'paused') {
-      return accumulated
+    if (timer.status === "paused") {
+      return accumulated;
     }
 
-    const lastResumedAt = new Date(timer.last_resumed_at)
-    const now = new Date()
-    const runningSeconds = Math.floor((now - lastResumedAt) / 1000)
+    const lastResumedAt = new Date(timer.last_resumed_at);
+    const now = new Date();
+    const runningSeconds = Math.floor((now - lastResumedAt) / 1000);
 
-    return accumulated + Math.max(runningSeconds, 0)
-  }
+    return accumulated + Math.max(runningSeconds, 0);
+  };
 
-  const loadDashboardData = async (userId, organizationId = null) => {
-    const startOfWeek = getStartOfWeek(new Date())
-    const endOfWeek = getEndOfWeek(new Date())
+  const loadDashboardData = async (userId, orgId = null) => {
+    const startOfWeek = getStartOfWeek(new Date());
+    const endOfWeek = getEndOfWeek(new Date());
 
     const { data: timeLogs } = await supabase
-      .from('time_logs')
-      .select('*')
-      .eq('user_id', userId)
-      .gte('start_time', startOfWeek.toISOString())
-      .lte('start_time', endOfWeek.toISOString())
-      .order('start_time', { ascending: false })
+      .from("time_logs")
+      .select(
+        `
+        *,
+        clients (
+          id,
+          name,
+          email,
+          currency,
+          hourly_rate
+        )
+      `
+      )
+      .eq("user_id", userId)
+      .gte("start_time", startOfWeek.toISOString())
+      .lte("start_time", endOfWeek.toISOString())
+      .order("start_time", { ascending: false });
 
     let clientsQuery = supabase
-      .from('clients')
-      .select('*')
-      .eq('status', 'active')
+      .from("clients")
+      .select("id, currency, status")
+      .eq("status", "active");
 
-    if (organizationId) {
-      clientsQuery = clientsQuery.or(
-        `user_id.eq.${userId},organization_id.eq.${organizationId}`
-      )
+    if (orgId) {
+      clientsQuery = clientsQuery.or(`user_id.eq.${userId},organization_id.eq.${orgId}`);
     } else {
-      clientsQuery = clientsQuery.eq('user_id', userId)
+      clientsQuery = clientsQuery.eq("user_id", userId);
     }
 
-    const { data: clients } = await clientsQuery
+    const { data: activeClients } = await clientsQuery;
 
     const { data: invoices } = await supabase
-      .from('invoices')
-      .select('*')
-      .eq('user_id', userId)
-      .neq('status', 'paid')
+      .from("invoices")
+      .select(
+        `
+        id,
+        total_amount,
+        status,
+        currency,
+        clients (
+          id,
+          currency
+        )
+      `
+      )
+      .eq("user_id", userId)
+      .neq("status", "paid")
+      .neq("status", "cancelled");
 
-    const totalHours = timeLogs?.reduce((sum, log) => {
-      return sum + Number(log.duration || 0) / 3600
-    }, 0)
+    const totalHours = (timeLogs || []).reduce((sum, log) => {
+      return sum + getHours(log.duration);
+    }, 0);
 
-    const billableAmount = timeLogs?.reduce((sum, log) => {
-      if (!log.billable) return sum
-
-      const hours = Number(log.duration || 0) / 3600
-      const rate = Number(log.hourly_rate || 0)
-
-      return sum + hours * rate
-    }, 0)
+    const billableLogs = (timeLogs || []).filter((log) => log.billable !== false);
+    const uninvoicedLogs = billableLogs.filter((log) => log.invoiced !== true);
 
     setStats({
       totalHours: totalHours || 0,
-      billableAmount: billableAmount || 0,
+      billableTotals: groupTotalsByLogCurrency(billableLogs),
+      unpaidInvoiceTotals: groupTotalsByInvoiceCurrency(invoices || []),
+      uninvoicedTotals: groupTotalsByLogCurrency(uninvoicedLogs),
       unpaidInvoices: invoices?.length || 0,
-      activeClients: clients?.length || 0,
-    })
+      uninvoicedLogs: uninvoicedLogs.length,
+      activeClients: activeClients?.length || 0,
+    });
 
-    setRecentEntries(timeLogs?.slice(0, 5) || [])
-  }
+    setRecentEntries((timeLogs || []).slice(0, 5));
+  };
 
   const handleTimerFormChange = (e) => {
-    const { name, value } = e.target
+    const { name, value } = e.target;
 
     setTimerForm((prev) => ({
       ...prev,
       [name]: value,
-    }))
-  }
+    }));
+  };
 
   const startTimer = async () => {
-    setTimerError('')
-    setTimerSuccess('')
+    setTimerError("");
+    setTimerSuccess("");
 
     if (!user) {
-      setTimerError('User session not found.')
-      return
+      setTimerError("User session not found.");
+      return;
     }
 
     if (!timerForm.client_id) {
-      setTimerError('Please select a client first.')
-      return
+      setTimerError("Please select a client first.");
+      return;
     }
 
     const selectedClient = clients.find(
       (client) => client.id === timerForm.client_id
-    )
+    );
 
-    const now = new Date()
+    const now = new Date();
 
     const { data, error } = await supabase
-      .from('active_timers')
+      .from("active_timers")
       .insert({
         user_id: user.id,
         organization_id: selectedClient?.organization_id || null,
         client_id: timerForm.client_id,
-        description: timerForm.description || '',
+        description: timerForm.description || "",
         hourly_rate: Number(selectedClient?.hourly_rate || 0),
-        status: 'running',
+        currency: normalizeCurrency(selectedClient?.currency),
+        status: "running",
         started_at: now.toISOString(),
         last_resumed_at: now.toISOString(),
         accumulated_seconds: 0,
       })
       .select()
-      .single()
+      .single();
 
     if (error) {
-      if (error.code === '23505') {
-        setTimerError('You already have an active timer. Refresh the page to reload it.')
+      if (error.code === "23505") {
+        setTimerError(
+          "You already have an active timer. Refresh the page to reload it."
+        );
       } else {
-        setTimerError(error.message)
+        setTimerError(error.message);
       }
 
-      return
+      return;
     }
 
-    setActiveTimerId(data.id)
-    setTimerStatus('running')
-    setTimerStartDate(now)
-    setElapsedSeconds(0)
-    startLocalInterval()
-  }
+    setActiveTimerId(data.id);
+    setTimerStatus("running");
+    setTimerStartDate(now);
+    setElapsedSeconds(0);
+    startLocalInterval();
+  };
 
   const pauseTimer = async () => {
-    if (timerStatus !== 'running' || !activeTimerId) return
+    if (timerStatus !== "running" || !activeTimerId) return;
 
-    setTimerError('')
-    setTimerSuccess('')
+    setTimerError("");
+    setTimerSuccess("");
 
-    clearTimerInterval()
+    clearTimerInterval();
 
     const { error } = await supabase
-      .from('active_timers')
+      .from("active_timers")
       .update({
-        status: 'paused',
+        status: "paused",
         paused_at: new Date().toISOString(),
         accumulated_seconds: elapsedSeconds,
       })
-      .eq('id', activeTimerId)
+      .eq("id", activeTimerId);
 
     if (error) {
-      setTimerError(error.message)
-      startLocalInterval()
-      return
+      setTimerError(error.message);
+      startLocalInterval();
+      return;
     }
 
-    setTimerStatus('paused')
-  }
+    setTimerStatus("paused");
+  };
 
   const resumeTimer = async () => {
-    if (timerStatus !== 'paused' || !activeTimerId) return
+    if (timerStatus !== "paused" || !activeTimerId) return;
 
-    setTimerError('')
-    setTimerSuccess('')
+    setTimerError("");
+    setTimerSuccess("");
 
-    const now = new Date()
+    const now = new Date();
 
     const { error } = await supabase
-      .from('active_timers')
+      .from("active_timers")
       .update({
-        status: 'running',
+        status: "running",
         last_resumed_at: now.toISOString(),
         paused_at: null,
         accumulated_seconds: elapsedSeconds,
       })
-      .eq('id', activeTimerId)
+      .eq("id", activeTimerId);
 
     if (error) {
-      setTimerError(error.message)
-      return
+      setTimerError(error.message);
+      return;
     }
 
-    setTimerStatus('running')
-    startLocalInterval()
-  }
+    setTimerStatus("running");
+    startLocalInterval();
+  };
 
   const stopAndSaveTimer = async () => {
-    setTimerError('')
-    setTimerSuccess('')
+    setTimerError("");
+    setTimerSuccess("");
 
     if (!user) {
-      setTimerError('User session not found.')
-      return
+      setTimerError("User session not found.");
+      return;
     }
 
     if (!activeTimerId) {
-      setTimerError('No active timer found.')
-      return
+      setTimerError("No active timer found.");
+      return;
     }
 
     if (!timerForm.client_id) {
-      setTimerError('Please select a client.')
-      return
+      setTimerError("Please select a client.");
+      return;
     }
 
     if (elapsedSeconds <= 0) {
-      setTimerError('Timer has no tracked time.')
-      return
+      setTimerError("Timer has no tracked time.");
+      return;
     }
 
-    clearTimerInterval()
+    clearTimerInterval();
 
     const { data: activeTimer, error: timerErrorResult } = await supabase
-      .from('active_timers')
-      .select('*')
-      .eq('id', activeTimerId)
-      .eq('user_id', user.id)
-      .single()
+      .from("active_timers")
+      .select("*")
+      .eq("id", activeTimerId)
+      .eq("user_id", user.id)
+      .single();
 
     if (timerErrorResult || !activeTimer) {
-      setTimerError(timerErrorResult?.message || 'Active timer not found.')
-      return
+      setTimerError(timerErrorResult?.message || "Active timer not found.");
+      return;
     }
 
-    const finalSeconds = calculateElapsedSecondsFromTimer(activeTimer)
-    const now = new Date()
-    const hours = Number((finalSeconds / 3600).toFixed(2))
+    const selectedClient = clients.find(
+      (client) => client.id === activeTimer.client_id
+    );
 
-    const { error: insertError } = await supabase.from('time_logs').insert({
+    const finalSeconds = calculateElapsedSecondsFromTimer(activeTimer);
+    const now = new Date();
+
+    const { error: insertError } = await supabase.from("time_logs").insert({
       user_id: user.id,
       organization_id: activeTimer.organization_id || null,
       client_id: activeTimer.client_id,
@@ -422,235 +467,153 @@ export default function DashboardPage() {
       start_time: new Date(activeTimer.started_at).toISOString(),
       end_time: now.toISOString(),
       duration: finalSeconds,
-      description: activeTimer.description || 'Timed work session',
-      hourly_rate: Number(activeTimer.hourly_rate || 0),
+      description: activeTimer.description || "Timed work session",
+      hourly_rate: Number(activeTimer.hourly_rate || selectedClient?.hourly_rate || 0),
+      currency: normalizeCurrency(activeTimer.currency || selectedClient?.currency),
       billable: true,
       invoiced: false,
-    })
+    });
 
     if (insertError) {
-      setTimerError(insertError.message)
+      setTimerError(insertError.message);
 
-      if (activeTimer.status === 'running') {
-        startLocalInterval()
+      if (activeTimer.status === "running") {
+        startLocalInterval();
       }
 
-      return
+      return;
     }
 
     const { error: deleteError } = await supabase
-      .from('active_timers')
+      .from("active_timers")
       .delete()
-      .eq('id', activeTimerId)
-      .eq('user_id', user.id)
+      .eq("id", activeTimerId)
+      .eq("user_id", user.id);
 
     if (deleteError) {
-      setTimerError(deleteError.message)
-      return
+      setTimerError(deleteError.message);
+      return;
     }
 
-    setActiveTimerId(null)
-    setTimerStatus('idle')
-    setElapsedSeconds(0)
-    setTimerStartDate(null)
+    setActiveTimerId(null);
+    setTimerStatus("idle");
+    setElapsedSeconds(0);
+    setTimerStartDate(null);
     setTimerForm((prev) => ({
       ...prev,
-      description: '',
-    }))
+      description: "",
+    }));
 
-    setTimerSuccess('Time entry saved successfully.')
+    setTimerSuccess("Time entry saved successfully.");
 
-    await loadDashboardData(user.id)
-  }
+    await loadDashboardData(user.id, organizationId);
+  };
 
   const cancelTimer = async () => {
-    setTimerError('')
-    setTimerSuccess('')
+    setTimerError("");
+    setTimerSuccess("");
 
-    clearTimerInterval()
+    clearTimerInterval();
 
     if (activeTimerId) {
       const { error } = await supabase
-        .from('active_timers')
+        .from("active_timers")
         .delete()
-        .eq('id', activeTimerId)
+        .eq("id", activeTimerId);
 
       if (error) {
-        setTimerError(error.message)
-        return
+        setTimerError(error.message);
+        return;
       }
     }
 
-    setActiveTimerId(null)
-    setTimerStatus('idle')
-    setElapsedSeconds(0)
-    setTimerStartDate(null)
+    setActiveTimerId(null);
+    setTimerStatus("idle");
+    setElapsedSeconds(0);
+    setTimerStartDate(null);
 
-    setTimerSuccess('Timer cancelled.')
-  }
+    setTimerSuccess("Timer cancelled.");
+  };
 
   const getStartOfWeek = (date) => {
-    const d = new Date(date)
-    const day = d.getDay()
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
 
-    return new Date(d.setDate(diff))
-  }
+    return new Date(d.setDate(diff));
+  };
 
   const getEndOfWeek = (date) => {
-    const start = getStartOfWeek(date)
-    const end = new Date(start)
+    const start = getStartOfWeek(date);
+    const end = new Date(start);
 
-    end.setDate(start.getDate() + 6)
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
 
-    return end
-  }
-
-  const formatDate = (date) => {
-    return date.toISOString().split('T')[0]
-  }
-
-  const formatTimeOnly = (date) => {
-    return date.toTimeString().split(' ')[0]
-  }
+    return end;
+  };
 
   const formatTimer = (seconds) => {
-    const hrs = Math.floor(seconds / 3600)
-    const mins = Math.floor((seconds % 3600) / 60)
-    const secs = seconds % 60
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
 
     return [hrs, mins, secs]
-      .map((value) => String(value).padStart(2, '0'))
-      .join(':')
-  }
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-PH', {
-      style: 'currency',
-      currency: 'PHP',
-    }).format(amount || 0)
-  }
-
-  const handleClientFormChange = (e) => {
-    const { name, value } = e.target
-
-    setClientForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }))
-  }
-
-  const resetClientForm = () => {
-    setClientForm({
-      name: '',
-      email: '',
-      hourly_rate: '',
-    })
-  }
-
-  const closeClientDialog = () => {
-    resetClientForm()
-    setShowClientDialog(false)
-  }
-
-  const addClient = async (e) => {
-    e.preventDefault()
-
-    if (!user) {
-      showToast('User session not found.', 'error')
-      return
-    }
-
-    if (!clientForm.name.trim()) {
-      showToast('Client name is required.', 'error')
-      return
-    }
-
-    const { data, error } = await supabase
-      .from('clients')
-      .insert({
-        user_id: user.id,
-        organization_id: null,
-        name: clientForm.name.trim(),
-        email: clientForm.email || null,
-        hourly_rate: Number(clientForm.hourly_rate || 0),
-        status: 'active',
-      })
-      .select()
-      .single()
-
-    if (error) {
-      showToast(error.message, 'error')
-      return
-    }
-
-    setClients((prev) => [data, ...prev])
-
-    setTimerForm((prev) => ({
-      ...prev,
-      client_id: prev.client_id || data.id,
-    }))
-
-    resetClientForm()
-    setShowClientDialog(false)
-
-    showToast('Client added successfully.', 'success')
-
-    await loadDashboardData(user.id)
-  }
+      .map((value) => String(value).padStart(2, "0"))
+      .join(":");
+  };
 
   if (loading) {
     return (
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="text-slate-500">
-          Loading dashboard...
-        </div>
+      <main className="mx-auto max-w-7xl px-4 py-8">
+        <div className="text-slate-500">Loading dashboard...</div>
       </main>
-    )
+    );
   }
 
-
-
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8">
-
+    <main className="mx-auto max-w-7xl px-4 py-8">
       <AddClientDialog
         open={showClientDialog}
         onClose={() => setShowClientDialog(false)}
         onClientAdded={(newClient) => {
-          setClients((prev) => [newClient, ...prev]);
+          const normalizedClient = {
+            ...newClient,
+            currency: normalizeCurrency(newClient.currency),
+          };
+
+          setClients((prev) => [normalizedClient, ...prev]);
 
           setTimerForm((prev) => ({
             ...prev,
-            client_id: prev.client_id || newClient.id,
+            client_id: prev.client_id || normalizedClient.id,
           }));
 
-          loadDashboardData(user.id);
+          loadDashboardData(user.id, organizationId);
         }}
       />
 
       <AddTimeDialog
-  open={showTimeDialog}
-  onClose={() => setShowTimeDialog(false)}
-  clients={clients}
-  onTimeAdded={() => {
-    if (user) {
-      loadDashboardData(user.id)
-    }
-  }}
-/>
+        open={showTimeDialog}
+        onClose={() => setShowTimeDialog(false)}
+        clients={clients}
+        onTimeAdded={() => {
+          if (user) {
+            loadDashboardData(user.id, organizationId);
+          }
+        }}
+      />
 
-
-      <div className="mb-5 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div className="mb-5 grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
         <div>
-          <div className="mb-5 flex flex-col sm:flex-row gap-3 text-right">
+          <div className="mb-5 flex flex-col gap-3 text-right sm:flex-row">
             <button
-  type="button"
-  onClick={() => setShowTimeDialog(true)}
-  className="rounded-xl bg-blue-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700"
->
-  Add Manual Time Entry
-</button>
+              type="button"
+              onClick={() => setShowTimeDialog(true)}
+              className="rounded-xl bg-blue-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Add Manual Time Entry
+            </button>
 
             <button
               type="button"
@@ -659,12 +622,10 @@ export default function DashboardPage() {
             >
               Add Client
             </button>
-
-
-
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">
                   Time Tracker
@@ -687,20 +648,20 @@ export default function DashboardPage() {
             </div>
 
             {timerError && (
-              <div className="mt-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {timerError}
               </div>
             )}
 
             {timerSuccess && (
-              <div className="mt-4 rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+              <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
                 {timerSuccess}
               </div>
             )}
 
-            <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
+                <label className="mb-2 block text-sm font-medium text-slate-700">
                   Client
                 </label>
 
@@ -708,7 +669,7 @@ export default function DashboardPage() {
                   name="client_id"
                   value={timerForm.client_id}
                   onChange={handleTimerFormChange}
-                  disabled={timerStatus !== 'idle'}
+                  disabled={timerStatus !== "idle"}
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:bg-slate-100"
                 >
                   {clients.length === 0 ? (
@@ -716,7 +677,8 @@ export default function DashboardPage() {
                   ) : (
                     clients.map((client) => (
                       <option key={client.id} value={client.id}>
-                        {client.name}
+                        {client.name} · {normalizeCurrency(client.currency)} ·{" "}
+                        {formatMoney(client.hourly_rate || 0, client.currency || "USD")}/hr
                       </option>
                     ))
                   )}
@@ -724,7 +686,7 @@ export default function DashboardPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
+                <label className="mb-2 block text-sm font-medium text-slate-700">
                   Description
                 </label>
 
@@ -733,15 +695,15 @@ export default function DashboardPage() {
                   name="description"
                   value={timerForm.description}
                   onChange={handleTimerFormChange}
-                  disabled={timerStatus !== 'idle'}
+                  disabled={timerStatus !== "idle"}
                   placeholder="Email management, admin task..."
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:bg-slate-100"
                 />
               </div>
             </div>
 
-            <div className="mt-5 flex flex-col sm:flex-row gap-3">
-              {timerStatus === 'idle' && (
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              {timerStatus === "idle" && (
                 <button
                   onClick={startTimer}
                   disabled={clients.length === 0}
@@ -751,7 +713,7 @@ export default function DashboardPage() {
                 </button>
               )}
 
-              {timerStatus === 'running' && (
+              {timerStatus === "running" && (
                 <button
                   onClick={pauseTimer}
                   className="flex-1 rounded-xl bg-yellow-500 px-4 py-3 text-sm font-semibold text-white hover:bg-yellow-600"
@@ -760,7 +722,7 @@ export default function DashboardPage() {
                 </button>
               )}
 
-              {timerStatus === 'paused' && (
+              {timerStatus === "paused" && (
                 <button
                   onClick={resumeTimer}
                   className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
@@ -769,7 +731,7 @@ export default function DashboardPage() {
                 </button>
               )}
 
-              {timerStatus !== 'idle' && (
+              {timerStatus !== "idle" && (
                 <>
                   <button
                     onClick={stopAndSaveTimer}
@@ -788,40 +750,42 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4 mb-8">
+        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           <StatCard
             title="Hours this week"
             value={stats.totalHours.toFixed(2)}
             description="Tracked hours"
+            icon={<Clock size={20} />}
           />
 
           <StatCard
             title="Billable amount"
-            value={formatCurrency(stats.billableAmount)}
-            description="This week"
+            value={<CurrencyTotals totals={stats.billableTotals} />}
+            description="This week by currency"
+            icon={<Wallet size={20} />}
           />
 
           <StatCard
             title="Unpaid invoices"
             value={stats.unpaidInvoices}
             description="Waiting for payment"
+            icon={<ReceiptText size={20} />}
           />
 
           <StatCard
             title="Active clients"
             value={stats.activeClients}
             description="Current clients"
+            icon={<Users size={20} />}
           />
         </div>
-
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm">
-          <div className="p-6 border-b border-slate-200 flex items-center justify-between gap-4">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-2">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-200 p-6">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">
                 Recent time entries
@@ -833,24 +797,24 @@ export default function DashboardPage() {
             </div>
 
             <button
-  type="button"
-  onClick={() => setShowTimeDialog(true)}
-  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
->
-  Add time
-</button>
+              type="button"
+              onClick={() => setShowTimeDialog(true)}
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Add time
+            </button>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  <th className="text-left px-6 py-3 font-medium">Date</th>
-                  <th className="text-left px-6 py-3 font-medium">
+                  <th className="px-6 py-3 text-left font-medium">Date</th>
+                  <th className="px-6 py-3 text-left font-medium">
                     Description
                   </th>
-                  <th className="text-left px-6 py-3 font-medium">Hours</th>
-                  <th className="text-left px-6 py-3 font-medium">Amount</th>
+                  <th className="px-6 py-3 text-left font-medium">Hours</th>
+                  <th className="px-6 py-3 text-left font-medium">Amount</th>
                 </tr>
               </thead>
 
@@ -865,99 +829,268 @@ export default function DashboardPage() {
                     </td>
                   </tr>
                 ) : (
-                  recentEntries.map((entry) => (
-                    <tr key={entry.id} className="border-t border-slate-100">
-                      <td className="px-6 py-4 text-slate-700">
-                        {new Date(entry.start_time).toLocaleDateString()}
-                      </td>
+                  recentEntries.map((entry) => {
+                    const currency = getLogCurrency(entry);
+                    const amount = getLogAmount(entry);
 
-                      <td className="px-6 py-4 text-slate-700">
-                        {entry.description || 'No description'}
-                      </td>
+                    return (
+                      <tr key={entry.id} className="border-t border-slate-100">
+                        <td className="px-6 py-4 text-slate-700">
+                          {new Date(entry.start_time).toLocaleDateString()}
+                        </td>
 
-                      <td className="px-6 py-4 text-slate-700">
-                        {(Number(entry.duration || 0) / 3600).toFixed(2)}
-                      </td>
+                        <td className="px-6 py-4 text-slate-700">
+                          <p>{entry.description || "No description"}</p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {entry.clients?.name || "No client"}
+                          </p>
+                        </td>
 
-                      <td className="px-6 py-4 text-slate-700">
-                        {formatCurrency(
-                          (Number(entry.duration || 0) / 3600) *
-                          Number(entry.hourly_rate || 0)
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                        <td className="px-6 py-4 text-slate-700">
+                          {getHours(entry.duration).toFixed(2)}
+                        </td>
+
+                        <td className="px-6 py-4 text-slate-700">
+                          {entry.billable === false ? (
+                            "—"
+                          ) : (
+                            <>
+                              <p className="font-semibold text-slate-900">
+                                {formatMoney(amount, currency)}
+                              </p>
+                              <p className="text-xs font-medium text-slate-400">
+                                {currency}
+                              </p>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <BillingHealthPanel
+          billableTotals={stats.billableTotals}
+          unpaidTotals={stats.unpaidInvoiceTotals}
+          uninvoicedTotals={stats.uninvoicedTotals}
+          unpaidInvoices={stats.unpaidInvoices}
+          uninvoicedLogs={stats.uninvoicedLogs}
+        />
+      </div>
+    </main>
+  );
+}
+
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
+}
+
+function getHours(duration) {
+  return Number(duration || 0) / 3600;
+}
+
+function getLogCurrency(log) {
+  return normalizeCurrency(
+    log?.currency || log?.clients?.currency || log?.client?.currency || "USD"
+  );
+}
+
+function getInvoiceCurrency(invoice) {
+  return normalizeCurrency(
+    invoice?.currency ||
+      invoice?.clients?.currency ||
+      invoice?.client?.currency ||
+      "USD"
+  );
+}
+
+function getLogAmount(log) {
+  const hours = getHours(log.duration);
+  const rate = Number(log.hourly_rate || log.clients?.hourly_rate || 0);
+
+  return hours * rate;
+}
+
+function groupTotalsByLogCurrency(logs = []) {
+  return logs.reduce((totals, log) => {
+    const currency = getLogCurrency(log);
+    const amount = getLogAmount(log);
+
+    if (!totals[currency]) {
+      totals[currency] = 0;
+    }
+
+    totals[currency] += amount;
+
+    return totals;
+  }, {});
+}
+
+function groupTotalsByInvoiceCurrency(invoices = []) {
+  return invoices.reduce((totals, invoice) => {
+    const currency = getInvoiceCurrency(invoice);
+    const amount = Number(invoice.total_amount || 0);
+
+    if (!totals[currency]) {
+      totals[currency] = 0;
+    }
+
+    totals[currency] += amount;
+
+    return totals;
+  }, {});
+}
+
+function CurrencyTotals({ totals }) {
+  const entries = Object.entries(totals || {});
+
+  if (entries.length === 0) {
+    return (
+      <div>
+        <p className="font-bold text-slate-900">{formatMoney(0, "USD")}</p>
+        <p className="text-xs font-medium text-slate-400">USD</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {entries.map(([currency, amount]) => (
+        <div key={currency}>
+          <p className="font-bold text-slate-900">
+            {formatMoney(amount, currency)}
+          </p>
+          <p className="text-xs font-medium text-slate-400">{currency}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BillingHealthPanel({
+  billableTotals,
+  unpaidTotals,
+  uninvoicedTotals,
+  unpaidInvoices,
+  uninvoicedLogs,
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="rounded-xl bg-blue-50 p-3 text-blue-600">
+          <FileText size={22} />
+        </div>
+
+        <div>
           <h3 className="text-lg font-semibold text-slate-900">
-            Quick actions
+            Billing Health
           </h3>
 
           <p className="mt-1 text-sm text-slate-500">
-            Common tasks for your VA billing workflow.
+            Important billing status grouped by currency.
           </p>
-
-          <div className="mt-5 space-y-3">
-            <Link
-              href="/va/clients"
-              className="block w-full rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              View clients
-            </Link>
-
-            <Link
-              href="/va/clients/new"
-              className="block w-full rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Add new client
-            </Link>
-
-            <Link
-              href="/va/time"
-              className="block w-full rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              View time entries
-            </Link>
-
-            <Link
-              href="/va/time/new"
-              className="block w-full rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Add manual time entry
-            </Link>
-
-            <Link
-              href="/va/invoices"
-              className="block w-full rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Generate / view invoices
-            </Link>
-          </div>
         </div>
       </div>
-    </main>
-  )
+
+      <div className="mt-6 space-y-4">
+        <HealthRow
+          icon={<Wallet size={18} />}
+          title="Billable this week"
+          description="Tracked billable work"
+          totals={billableTotals}
+        />
+
+        <HealthRow
+          icon={<ReceiptText size={18} />}
+          title="Unpaid invoices"
+          description={`${unpaidInvoices} invoice${
+            unpaidInvoices === 1 ? "" : "s"
+          } waiting for payment`}
+          totals={unpaidTotals}
+        />
+
+        <HealthRow
+          icon={<TimerReset size={18} />}
+          title="Ready to invoice"
+          description={`${uninvoicedLogs} uninvoiced billable time log${
+            uninvoicedLogs === 1 ? "" : "s"
+          }`}
+          totals={uninvoicedTotals}
+        />
+
+        {uninvoicedLogs > 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex gap-3">
+              <AlertTriangle
+                size={20}
+                className="mt-0.5 shrink-0 text-amber-600"
+              />
+
+              <div>
+                <p className="text-sm font-semibold text-amber-900">
+                  You have billable work not yet invoiced.
+                </p>
+                <p className="mt-1 text-sm text-amber-700">
+                  Go to invoices and generate an invoice from your time logs
+                  before the billing period ends.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {uninvoicedLogs === 0 && unpaidInvoices === 0 && (
+          <div className="rounded-2xl border border-green-200 bg-green-50 p-4">
+            <p className="text-sm font-semibold text-green-800">
+              Your billing looks clean.
+            </p>
+            <p className="mt-1 text-sm text-green-700">
+              No unpaid invoices and no uninvoiced billable logs this week.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function StatCard({ title, value, description }) {
+function HealthRow({ icon, title, description, totals }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-      <p className="text-sm font-medium text-slate-500">
-        {title}
-      </p>
+    <div className="rounded-2xl border border-slate-200 p-4">
+      <div className="mb-3 flex items-start gap-3">
+        <div className="rounded-xl bg-slate-50 p-2 text-blue-600">{icon}</div>
 
-      <h3 className="mt-3 text-3xl font-bold text-slate-900">
-        {value}
-      </h3>
+        <div>
+          <p className="font-semibold text-slate-900">{title}</p>
+          <p className="text-sm text-slate-500">{description}</p>
+        </div>
+      </div>
 
-      <p className="mt-2 text-sm text-slate-400">
-        {description}
-      </p>
+      <CurrencyTotals totals={totals} />
     </div>
-  )
+  );
+}
+
+function StatCard({ title, value, description, icon }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-500">{title}</p>
+
+          <div className="mt-3 text-3xl font-bold text-slate-900">
+            {value}
+          </div>
+
+          <p className="mt-2 text-sm text-slate-400">{description}</p>
+        </div>
+
+        {icon && <div className="shrink-0 text-blue-600">{icon}</div>}
+      </div>
+    </div>
+  );
 }

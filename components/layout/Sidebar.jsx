@@ -67,7 +67,7 @@ const menus = {
 };
 
 
-export default function Sidebar() {
+export default function Sidebar({ setSidebarOpen }) {
     const pathname = usePathname();
     const { role, user, organization, signOutUser, loading } = useAppContext();
 
@@ -89,6 +89,7 @@ export default function Sidebar() {
 
                     return (
                         <Link
+                            onClick={setSidebarOpen ? () => setSidebarOpen(false) : null}
                             key={item.href}
                             href={item.href}
                             className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${active

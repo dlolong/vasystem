@@ -1,10 +1,10 @@
-// Format for UI display (₱12,500.00)
+// Format for UI display ($12,500.00)
 export function formatAmount(value) {
-  if (!value) return '₱0.00'
+  if (!value) return '$0.00'
 
-  return new Intl.NumberFormat('en-PH', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'PHP',
+    currency: 'USD',
     minimumFractionDigits: 2,
   }).format(Number(value))
 }
@@ -15,7 +15,7 @@ export function formatAmountInput(value) {
 
   const number = Number(value.toString().replace(/,/g, ''))
 
-  return number.toLocaleString('en-PH')
+  return number.toLocaleString('en-US')
 }
 
 // Clean value for DB (remove commas, symbols)
@@ -25,7 +25,7 @@ export function parseAmount(value) {
   return Number(
     value
       .toString()
-      .replace(/[₱,]/g, '')
+      .replace(/[$,]/g, '')
       .trim()
   )
 }

@@ -13,7 +13,8 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { useAuthUser } from "@/lib/hooks/useAuthUser";
 import { useAppContext } from "@/context/AppContext";
-import AppDialog from "@/components/ui/AppDialog";
+import AddClientDialog from "@/components/AddClientDialog";
+import { formatMoney } from "@/lib/currency";
 
 const PAGE_SIZE = 8;
 
@@ -26,19 +27,9 @@ export default function AgencyClientsPage() {
 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
-
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    company_name: "",
-    hourly_rate: "",
-  });
 
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(totalClients / PAGE_SIZE), 1);
@@ -48,7 +39,7 @@ export default function AgencyClientsPage() {
     if (profile?.organization_id) {
       loadClients();
     }
-  }, [profile, page, search]);
+  }, [profile?.organization_id, page, search]);
 
   async function loadClients() {
     if (!profile?.organization_id) return;
@@ -60,14 +51,29 @@ export default function AgencyClientsPage() {
 
     let query = supabase
       .from("clients")
-      .select("*", { count: "exact" })
+      .select(
+        `
+        id,
+        name,
+        email,
+        hourly_rate,
+        currency,
+        status,
+        organization_id,
+        user_id,
+        created_at
+      `,
+        { count: "exact" }
+      )
       .eq("organization_id", profile.organization_id)
       .order("created_at", { ascending: false })
       .range(from, to);
 
     if (search.trim()) {
+      const keyword = search.trim();
+
       query = query.or(
-        `name.ilike.%${search.trim()}%,email.ilike.%${search.trim()}%,company_name.ilike.%${search.trim()}%`
+        `name.ilike.%${keyword}%,email.ilike.%${keyword}%,company_name.ilike.%${keyword}%`
       );
     }
 
@@ -81,78 +87,15 @@ export default function AgencyClientsPage() {
       return;
     }
 
-    setClients(data || []);
+    setClients(
+      (data || []).map((client) => ({
+        ...client,
+        currency: normalizeCurrency(client.currency),
+      }))
+    );
+
     setTotalClients(count || 0);
     setLoading(false);
-  }
-
-  function updateForm(e) {
-    const { name, value } = e.target;
-
-    setForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-  }
-
-  function resetForm() {
-    setForm({
-      name: "",
-      email: "",
-      phone: "",
-      company_name: "",
-      hourly_rate: "",
-    });
-  }
-
-  async function addClient(e) {
-    e.preventDefault();
-
-    if (!profile?.organization_id) {
-      showToast("Agency organization not found.", "error");
-      return;
-    }
-
-    if (!form.name.trim()) {
-      showToast("Client name is required.", "error");
-      return;
-    }
-
-    setAdding(true);
-
-    const { error } = await supabase.from("clients").insert({
-      organization_id: profile.organization_id,
-      user_id: null,
-      name: form.name.trim(),
-      email: form.email || null,
-      phone: form.phone || null,
-      company_name: form.company_name || null,
-      hourly_rate: Number(form.hourly_rate || 0),
-      status: "active",
-      currency: "PHP",
-    });
-
-    if (error) {
-      showToast(error.message, "error");
-      setAdding(false);
-      return;
-    }
-
-    showToast("Client added successfully.", "success");
-
-    resetForm();
-    setShowAddDialog(false);
-    setPage(1);
-    setAdding(false);
-
-    await loadClients();
-  }
-
-  function formatCurrency(amount) {
-    return new Intl.NumberFormat("en-PH", {
-      style: "currency",
-      currency: "PHP",
-    }).format(amount || 0);
   }
 
   function handleSearch(value) {
@@ -160,109 +103,27 @@ export default function AgencyClientsPage() {
     setPage(1);
   }
 
+  function handleClientAdded(newClient) {
+    const normalizedClient = {
+      ...newClient,
+      currency: normalizeCurrency(newClient?.currency),
+    };
+
+    setClients((prev) => [normalizedClient, ...prev]);
+    setShowAddDialog(false);
+    setPage(1);
+    loadClients();
+  }
+
   return (
     <main className="space-y-6">
-
-      <AppDialog
-  open={showAddDialog}
-  title="Add Client"
-  description="Add a new agency client for projects, invoices, and VA work."
-  onClose={() => setShowAddDialog(false)}
->
-  <form onSubmit={addClient} className="space-y-5">
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Client Name
-        </label>
-
-        <input
-          name="name"
-          value={form.name}
-          onChange={updateForm}
-          placeholder="Client name"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Email
-        </label>
-
-        <input
-          name="email"
-          type="email"
-          value={form.email}
-          onChange={updateForm}
-          placeholder="client@email.com"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Phone
-        </label>
-
-        <input
-          name="phone"
-          value={form.phone}
-          onChange={updateForm}
-          placeholder="Phone"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Company
-        </label>
-
-        <input
-          name="company_name"
-          value={form.company_name}
-          onChange={updateForm}
-          placeholder="Company name"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div className="sm:col-span-2">
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Hourly Rate
-        </label>
-
-        <input
-          name="hourly_rate"
-          type="number"
-          value={form.hourly_rate}
-          onChange={updateForm}
-          placeholder="0"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-    </div>
-
-    <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
-      <button
-        type="button"
-        onClick={() => setShowAddDialog(false)}
-        className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-      >
-        Cancel
-      </button>
-
-      <button
-        type="submit"
-        disabled={adding}
-        className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-      >
-        {adding ? "Adding..." : "Add Client"}
-      </button>
-    </div>
-  </form>
-</AppDialog>
+      <AddClientDialog
+        open={showAddDialog}
+        onClose={() => setShowAddDialog(false)}
+        onClientAdded={handleClientAdded}
+        mode="agency"
+        organizationId={profile?.organization_id}
+      />
 
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
@@ -276,27 +137,28 @@ export default function AgencyClientsPage() {
           <button
             type="button"
             onClick={() => setShowAddDialog(true)}
-            className="h-content inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
           >
             <Plus size={18} />
             Add Client
           </button>
-         <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-blue-600 p-3 text-white">
-              <UserRound size={20} />
-            </div>
 
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-blue-600">
-                Total Clients
-              </p>
-              <p className="text-2xl font-bold text-blue-900">
-                {totalClients}
-              </p>
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-blue-600 p-3 text-white">
+                <UserRound size={20} />
+              </div>
+
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-blue-600">
+                  Total Clients
+                </p>
+                <p className="text-2xl font-bold text-blue-900">
+                  {totalClients}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
 
@@ -308,7 +170,8 @@ export default function AgencyClientsPage() {
                 Client List
               </h2>
               <p className="text-sm text-slate-500">
-                Search and manage your agency clients.
+                Search and manage your agency clients with their preferred
+                currency.
               </p>
             </div>
 
@@ -338,47 +201,55 @@ export default function AgencyClientsPage() {
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
-            {clients.map((client) => (
-              <div
-                key={client.id}
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold uppercase text-white">
-                    {client.name?.charAt(0) || "C"}
+            {clients.map((client) => {
+              const currency = normalizeCurrency(client.currency);
+
+              return (
+                <div
+                  key={client.id}
+                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-2xl bg-blue-600 text-sm uppercase text-white">
+                      {client.name?.charAt(0) || "C"}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-slate-900">
+                            {client.name}
+                          </h3>
+                        </div>
+
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                          {currency}
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="min-w-0">
-                    <h3 className="truncate font-semibold text-slate-900">
-                      {client.name}
-                    </h3>
+                  <div className="mt-5 space-y-2 text-sm text-slate-600">
+                    <p className="flex items-center gap-2">
+                      <Mail size={15} />
+                      <span className="truncate">
+                        {client.email || "No email"}
+                      </span>
+                    </p>
+                  </div>
 
-                    <p className="truncate text-sm text-slate-500">
-                      {client.company_name || "No company"}
+                  <div className="mt-5 rounded-xl bg-slate-50 p-3">
+                    <p className="text-xs text-slate-500">Hourly Rate</p>
+                    <p className="mt-1 font-semibold text-slate-900">
+                      {formatMoney(client.hourly_rate || 0, currency)} / hr
+                    </p>
+                    <p className="mt-1 text-xs font-medium text-slate-400">
+                      Preferred currency: {currency}
                     </p>
                   </div>
                 </div>
-
-                <div className="mt-5 space-y-2 text-sm text-slate-600">
-                  <p className="flex items-center gap-2">
-                    <Mail size={15} />
-                    {client.email || "No email"}
-                  </p>
-
-                  <p className="flex items-center gap-2">
-                    <Phone size={15} />
-                    {client.phone || "No phone"}
-                  </p>
-                </div>
-
-                <div className="mt-5 rounded-xl bg-slate-50 p-3">
-                  <p className="text-xs text-slate-500">Hourly Rate</p>
-                  <p className="mt-1 font-semibold text-slate-900">
-                    {formatCurrency(client.hourly_rate)} / hr
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -393,6 +264,10 @@ export default function AgencyClientsPage() {
       </section>
     </main>
   );
+}
+
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
 }
 
 function SkeletonGrid() {

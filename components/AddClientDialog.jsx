@@ -4,11 +4,14 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
+import { CURRENCY_OPTIONS, formatMoney } from "@/lib/currency";
 
 export default function AddClientDialog({
   open,
   onClose,
   onClientAdded,
+  mode = "va",
+  organizationId = null,
 }) {
   const { showToast } = useAppContext();
 
@@ -18,6 +21,7 @@ export default function AddClientDialog({
     name: "",
     email: "",
     hourly_rate: "",
+    currency: "USD",
   });
 
   if (!open) return null;
@@ -62,14 +66,17 @@ export default function AddClientDialog({
       return;
     }
 
+    const isAgency = mode === "agency";
+
     const { data, error } = await supabase
       .from("clients")
       .insert({
         user_id: user.id,
-        organization_id: null,
+        organization_id: isAgency ? organizationId : null,
         name: form.name.trim(),
         email: form.email || null,
         hourly_rate: Number(form.hourly_rate || 0),
+        currency: form.currency || "USD",
         status: "active",
       })
       .select()
@@ -158,6 +165,25 @@ export default function AddClientDialog({
               placeholder="0"
               className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
             />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">
+              Preferred Currency
+            </label>
+
+            <select
+              name="currency"
+              value={form.currency}
+              onChange={updateField}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            >
+              {CURRENCY_OPTIONS.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">

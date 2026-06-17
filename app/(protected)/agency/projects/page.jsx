@@ -63,7 +63,7 @@ export default function AgencyProjectsPage() {
 
     const { data } = await supabase
       .from("clients")
-      .select("id, name, email")
+      .select("id, name, email, currency")
       .eq("organization_id", profile.organization_id)
       .eq("status", "active")
       .order("name", { ascending: true });
@@ -87,7 +87,8 @@ export default function AgencyProjectsPage() {
         clients (
           id,
           name,
-          email
+          email,
+          currency
         )
       `,
         { count: "exact" }

@@ -33,6 +33,7 @@ export default function ProtectedLayout({ children }) {
         >
           <div className="absolute right-3 top-3">
             <button
+              type="button"
               onClick={() => setSidebarOpen(false)}
               className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
             >
@@ -40,23 +41,24 @@ export default function ProtectedLayout({ children }) {
             </button>
           </div>
 
-          <Sidebar />
+          <Sidebar setSidebarOpen={setSidebarOpen} />
         </div>
 
         {/* MAIN CONTENT */}
         <div className="lg:pl-64">
-          {/* MOBILE TOP BAR */}
-          <div className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white px-4 lg:hidden">
+          {/* MOBILE TOPBAR WITH MENU + SEARCH + ACTION ICONS */}
+          <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 lg:hidden">
             <button
+              type="button"
               onClick={() => setSidebarOpen(true)}
-              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100"
+              aria-label="Open menu"
             >
               <Menu size={22} />
             </button>
 
-            <div>
-              <p className="text-sm font-bold text-indigo-600">VA System</p>
-              <p className="text-xs text-slate-500">Workspace</p>
+            <div className="min-w-0 flex-1">
+              <Topbar />
             </div>
           </div>
 

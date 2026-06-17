@@ -17,11 +17,12 @@ export async function GET(request, context) {
       `
       *,
       clients (
-        id,
-        name,
-        email,
-        hourly_rate
-      )
+            id,
+            name,
+            email,
+            currency,
+            hourly_rate
+          )
     `
     )
     .eq("public_token", token)
@@ -59,6 +60,7 @@ export async function GET(request, context) {
     invoice: {
       ...invoice,
       client: invoice.clients,
+      currency: invoice.currency || invoice.clients?.currency || "USD",
       subtotal,
       tax,
       total,

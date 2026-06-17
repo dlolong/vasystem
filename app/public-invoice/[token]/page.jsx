@@ -78,7 +78,7 @@ export default function PublicInvoicePage() {
     )
   }
 
-  const currency = invoice.client?.currency || 'PHP'
+  const currency = invoice.currency || invoice.client?.currency || "USD";
 
   return (
     <div className="min-h-screen bg-slate-50">

@@ -15,6 +15,11 @@ import { useAuthUser } from "@/lib/hooks/useAuthUser";
 import { useAppContext } from "@/context/AppContext";
 import AppDialog from "@/components/ui/AppDialog";
 
+import { Eye, Wand2 } from "lucide-react";
+import GenerateInvoiceDialog from "@/components/invoices/GenerateInvoiceDialog";
+import InvoicePreviewDialog from "@/components/invoices/InvoicePreviewDialog";
+import InvoiceListItem from "@/components/invoices/InvoiceListItem";
+import { formatMoney, groupTotalsByCurrency } from "@/lib/currency";
 const PAGE_SIZE = 8;
 
 const statusOptions = [
@@ -42,6 +47,9 @@ export default function AgencyInvoicesPage() {
 
   const [showAddDialog, setShowAddDialog] = useState(false);
 
+  const [showGenerateDialog, setShowGenerateDialog] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+
   const [form, setForm] = useState({
     client_id: "",
     invoice_number: "",
@@ -67,7 +75,7 @@ export default function AgencyInvoicesPage() {
 
     const { data } = await supabase
       .from("clients")
-      .select("id, name, email")
+      .select("id, name, email, currency")
       .eq("organization_id", profile.organization_id)
       .eq("status", "active")
       .order("name", { ascending: true });
@@ -88,11 +96,13 @@ export default function AgencyInvoicesPage() {
       .select(
         `
         *,
-        clients (
-          id,
-          name,
-          email
-        )
+       clients (
+            id,
+            name,
+            email,
+            currency,
+            hourly_rate
+          )
       `,
         { count: "exact" }
       )
@@ -205,12 +215,12 @@ export default function AgencyInvoicesPage() {
 
     showToast("Invoice added successfully.", "success");
 
-resetForm();
-setShowAddDialog(false);
-setPage(1);
-setAdding(false);
+    resetForm();
+    setShowAddDialog(false);
+    setPage(1);
+    setAdding(false);
 
-await loadInvoices();
+    await loadInvoices();
   }
 
   async function updateInvoiceStatus(invoiceId, status) {
@@ -225,7 +235,7 @@ await loadInvoices();
       return;
     }
 
-    showToast("Invoice updated.", "success");
+    showToast("Invoice status updated.", "success");
 
     setInvoices((prev) =>
       prev.map((invoice) =>
@@ -268,157 +278,191 @@ await loadInvoices();
     return styles[status] || styles.draft;
   }
 
+  function CurrencyTotals({ totals }) {
+    const entries = Object.entries(totals || {});
+
+    if (entries.length === 0) {
+      return <span>$0.00</span>;
+    }
+
+    return (
+      <div className="space-y-1">
+        {entries.map(([currency, amount]) => (
+          <div key={currency} className="text-right">
+            <p className="font-bold text-slate-900">
+              {formatMoney(amount, currency)}
+            </p>
+            <p className="text-xs font-medium text-slate-400">{currency}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const summary = useMemo(() => {
-    const visibleTotal = invoices.reduce((sum, invoice) => {
-      return sum + Number(invoice.total_amount || 0);
-    }, 0);
+    const visibleTotals = groupTotalsByCurrency(invoices);
 
-    const unpaidTotal = invoices.reduce((sum, invoice) => {
-      if (invoice.status === "paid" || invoice.status === "cancelled") {
-        return sum;
-      }
+    const unpaidInvoices = invoices.filter(
+      (invoice) =>
+        invoice.status !== "paid" && invoice.status !== "cancelled"
+    );
 
-      return sum + Number(invoice.total_amount || 0);
-    }, 0);
-
-    const unpaidCount = invoices.filter(
-      (invoice) => invoice.status !== "paid" && invoice.status !== "cancelled"
-    ).length;
+    const unpaidTotals = groupTotalsByCurrency(unpaidInvoices);
 
     return {
-      visibleTotal,
-      unpaidTotal,
-      unpaidCount,
+      visibleTotals,
+      unpaidTotals,
+      unpaidCount: unpaidInvoices.length,
     };
   }, [invoices]);
 
   return (
     <main className="space-y-6">
-      <AppDialog
-  open={showAddDialog}
-  title="Add Invoice"
-  description="Create a public invoice link for your agency client."
-  onClose={() => setShowAddDialog(false)}
->
-  <form onSubmit={addInvoice} className="space-y-5">
-    <div>
-      <label className="mb-2 block text-sm font-medium text-slate-700">
-        Client
-      </label>
 
-      <select
-        name="client_id"
-        value={form.client_id}
-        onChange={updateForm}
-        className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-      >
-        <option value="">Select client</option>
-        {clients.map((client) => (
-          <option key={client.id} value={client.id}>
-            {client.name}
-          </option>
-        ))}
-      </select>
-    </div>
-
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Invoice Number
-        </label>
-
-        <input
-          name="invoice_number"
-          value={form.invoice_number}
-          onChange={updateForm}
-          placeholder="Auto-generated if empty"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Amount
-        </label>
-
-        <input
-          name="total_amount"
-          type="number"
-          value={form.total_amount}
-          onChange={updateForm}
-          placeholder="0"
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Status
-        </label>
-
-        <select
-          name="status"
-          value={form.status}
-          onChange={updateForm}
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        >
-          {statusOptions.map((status) => (
-            <option key={status.value} value={status.value}>
-              {status.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">
-          Due Date
-        </label>
-
-        <input
-          name="due_date"
-          type="date"
-          value={form.due_date}
-          onChange={updateForm}
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        />
-      </div>
-    </div>
-
-    <div>
-      <label className="mb-2 block text-sm font-medium text-slate-700">
-        Notes
-      </label>
-
-      <textarea
-        name="notes"
-        value={form.notes}
-        onChange={updateForm}
-        rows={4}
-        placeholder="Invoice notes..."
-        className="w-full resize-none rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+      <GenerateInvoiceDialog
+        open={showGenerateDialog}
+        mode="agency"
+        organizationId={profile?.organization_id}
+        clients={clients}
+        onClose={() => setShowGenerateDialog(false)}
+        onGenerated={(invoice) => {
+          setShowGenerateDialog(false);
+          setSelectedInvoice(invoice);
+          loadInvoices();
+        }}
       />
-    </div>
 
-    <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
-      <button
-        type="button"
-        onClick={() => setShowAddDialog(false)}
-        className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-      >
-        Cancel
-      </button>
+      <InvoicePreviewDialog
+        open={!!selectedInvoice}
+        invoice={selectedInvoice}
+        onClose={() => setSelectedInvoice(null)}
+      />
 
-      <button
-        type="submit"
-        disabled={adding}
-        className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+      <AppDialog
+        open={showAddDialog}
+        title="Add Invoice"
+        description="Create a public invoice link for your agency client."
+        onClose={() => setShowAddDialog(false)}
       >
-        {adding ? "Adding..." : "Add Invoice"}
-      </button>
-    </div>
-  </form>
-</AppDialog>
+        <form onSubmit={addInvoice} className="space-y-5">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">
+              Client
+            </label>
+
+            <select
+              name="client_id"
+              value={form.client_id}
+              onChange={updateForm}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            >
+              <option value="">Select client</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                Invoice Number
+              </label>
+
+              <input
+                name="invoice_number"
+                value={form.invoice_number}
+                onChange={updateForm}
+                placeholder="Auto-generated if empty"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                Amount
+              </label>
+
+              <input
+                name="total_amount"
+                type="number"
+                value={form.total_amount}
+                onChange={updateForm}
+                placeholder="0"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                Status
+              </label>
+
+              <select
+                name="status"
+                value={form.status}
+                onChange={updateForm}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              >
+                {statusOptions.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                Due Date
+              </label>
+
+              <input
+                name="due_date"
+                type="date"
+                value={form.due_date}
+                onChange={updateForm}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">
+              Notes
+            </label>
+
+            <textarea
+              name="notes"
+              value={form.notes}
+              onChange={updateForm}
+              rows={4}
+              placeholder="Invoice notes..."
+              className="w-full resize-none rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            />
+          </div>
+
+          <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setShowAddDialog(false)}
+              className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              disabled={adding}
+              className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {adding ? "Adding..." : "Add Invoice"}
+            </button>
+          </div>
+        </form>
+      </AppDialog>
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Invoices</h1>
@@ -427,14 +471,14 @@ await loadInvoices();
           </p>
         </div>
 
-           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
             type="button"
-            onClick={() => setShowAddDialog(true)}
-            className="h-content inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+            onClick={() => setShowGenerateDialog(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
           >
-            <Plus size={18} />
-            Add Invoice
+            <Wand2 size={18} />
+            Generate Invoice
           </button>
         </div>
 
@@ -443,14 +487,14 @@ await loadInvoices();
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <StatCard
           title="Visible Total"
-          value={formatCurrency(summary.visibleTotal)}
+          value={<CurrencyTotals totals={summary.visibleTotals} />}
           description="Invoices on this page"
           icon={<FileText size={20} />}
         />
 
         <StatCard
           title="Unpaid Amount"
-          value={formatCurrency(summary.unpaidTotal)}
+          value={<CurrencyTotals totals={summary.unpaidTotals} />}
           description="Unpaid on this page"
           icon={<Wallet size={20} />}
         />
@@ -509,74 +553,13 @@ await loadInvoices();
         ) : (
           <div className="divide-y divide-slate-100">
             {invoices.map((invoice) => (
-              <div
+              <InvoiceListItem
                 key={invoice.id}
-                className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.2fr_1fr_160px_170px]"
-              >
-                <div>
-                  <h3 className="font-semibold text-slate-900">
-                    {invoice.invoice_number ||
-                      `Invoice ${invoice.id.slice(0, 8)}`}
-                  </h3>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    {invoice.clients?.name || "No client"}
-                  </p>
-
-                  <p className="mt-2 text-xs text-slate-400">
-                    Due: {formatDate(invoice.due_date)}
-                  </p>
-
-                  {invoice.public_token && (
-                    <a
-                      href={`/public-invoice/${invoice.public_token}`}
-                      target="_blank"
-                      className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline"
-                    >
-                      View public invoice
-                    </a>
-                  )}
-                </div>
-
-                <div>
-                  <p className="text-sm text-slate-500">Amount</p>
-                  <p className="font-semibold text-slate-900">
-                    {formatCurrency(invoice.total_amount)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="mb-2 text-sm text-slate-500">Status</p>
-
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusBadge(
-                      invoice.status
-                    )}`}
-                  >
-                    {invoice.status || "draft"}
-                  </span>
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-xs font-medium text-slate-500">
-                    Update Status
-                  </label>
-
-                  <select
-                    value={invoice.status || "draft"}
-                    onChange={(e) =>
-                      updateInvoiceStatus(invoice.id, e.target.value)
-                    }
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                  >
-                    {statusOptions.map((status) => (
-                      <option key={status.value} value={status.value}>
-                        {status.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                invoice={invoice}
+                formatDate={formatDate}
+                onView={setSelectedInvoice}
+                onStatusChange={updateInvoiceStatus}
+              />
             ))}
           </div>
         )}
@@ -597,14 +580,19 @@ await loadInvoices();
 function StatCard({ title, value, description, icon }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-500">{title}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-slate-500">{title}</p>
+
+          <div className="mt-3 text-2xl font-bold text-slate-900">
+            {value}
+          </div>
+
+          <p className="mt-1 text-sm text-slate-400">{description}</p>
+        </div>
+
         <div className="text-blue-600">{icon}</div>
       </div>
-
-      <h3 className="mt-3 text-2xl font-bold text-slate-900">{value}</h3>
-
-      <p className="mt-1 text-sm text-slate-400">{description}</p>
     </div>
   );
 }

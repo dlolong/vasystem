@@ -111,6 +111,8 @@ export default function AddInvoiceDialog({
                 organization_id: selectedClient.organization_id || null,
                 client_id: selectedClient.id,
 
+                currency: selectedCurrency,
+
                 public_token: publicToken,
                 payment_link: publicInvoiceLink,
 
@@ -128,6 +130,7 @@ export default function AddInvoiceDialog({
       id,
       name,
       email,
+      currency,
       hourly_rate
     )
   `

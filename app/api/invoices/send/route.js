@@ -49,7 +49,6 @@ export async function POST(request) {
         *,
         clients (
           name,
-          company_name,
           email,
           currency
         )

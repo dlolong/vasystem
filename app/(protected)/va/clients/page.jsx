@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import AddClientDialog from "@/components/va/AddClientDialog";
+import AddClientDialog from "@/components/AddClientDialog";
+
+import { CURRENCY_OPTIONS, formatMoney } from "@/lib/currency";
 
 export default function VaClientsPage() {
   const [clients, setClients] = useState([]);
@@ -103,7 +105,7 @@ export default function VaClientsPage() {
                 </div>
 
                 <div className="text-sm font-medium text-slate-700">
-                  {formatCurrency(client.hourly_rate)} / hr
+                   {formatMoney(client.hourly_rate, client.currency || "USD")} / hr
                 </div>
               </div>
             ))}

@@ -187,7 +187,7 @@ export default function Topbar() {
 
                         supabase
                             .from("clients")
-                            .select("id, name, email, company_name")
+                            .select("id, name, email, currency,company_name")
                             .eq("organization_id", orgId)
                             .or(
                                 `name.ilike.%${safeQuery}%,email.ilike.%${safeQuery}%,company_name.ilike.%${safeQuery}%`
@@ -244,7 +244,7 @@ export default function Topbar() {
                     await Promise.all([
                         supabase
                             .from("clients")
-                            .select("id, name, email")
+                            .select("id, name, email, currency")
                             .eq("user_id", user.id)
                             .or(`name.ilike.%${safeQuery}%,email.ilike.%${safeQuery}%`)
                             .limit(5),
@@ -377,12 +377,12 @@ export default function Topbar() {
         setSearchOpen(false);
     }
 
-   return (
-  <div
-    ref={wrapperRef}
-    className="sticky top-0 z-30 hidden h-16 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 lg:flex"
-  >
-    <div className="relative w-full max-w-2xl">
+    return (
+        <div
+            ref={wrapperRef}
+            className="flex w-full items-center justify-between gap-2 bg-white lg:h-16 lg:gap-4 lg:border-b lg:border-slate-200 lg:px-6"
+        >
+            <div className="relative w-full min-w-0 lg:max-w-2xl">
                 <div className="flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2">
                     <Search size={16} className="text-slate-500" />
 

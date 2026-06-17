@@ -7,8 +7,6 @@ import {
   UserRound,
   FolderKanban,
   FileText,
-  Wallet,
-  Clock,
   ArrowRight,
   Plus,
   CheckCircle,
@@ -17,12 +15,57 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { useAuthUser } from "@/lib/hooks/useAuthUser";
 import { useAppContext } from "@/context/AppContext";
+import { formatMoney } from "@/lib/currency";
+
+const DEFAULT_CURRENCY = "USD";
 
 function isOnline(lastActive) {
   if (!lastActive) return false;
 
   const diff = Date.now() - new Date(lastActive).getTime();
   return diff < 60 * 1000;
+}
+
+function getRelatedClient(row) {
+  if (!row?.clients) return null;
+
+  return Array.isArray(row.clients) ? row.clients[0] : row.clients;
+}
+
+function getInvoiceCurrency(invoice) {
+  const client = getRelatedClient(invoice);
+  return client?.currency || DEFAULT_CURRENCY;
+}
+
+function safeFormatMoney(amount, currency = DEFAULT_CURRENCY) {
+  const cleanCurrency = currency || DEFAULT_CURRENCY;
+
+  try {
+    return formatMoney(Number(amount || 0), cleanCurrency);
+  } catch {
+    return formatMoney(Number(amount || 0), DEFAULT_CURRENCY);
+  }
+}
+
+function getInvoiceTotalsByCurrency(invoices, type) {
+  const totals = invoices.reduce((acc, invoice) => {
+    const status = invoice.status || "draft";
+
+    if (type === "paid" && status !== "paid") return acc;
+    if (type === "unpaid" && ["paid", "cancelled"].includes(status)) {
+      return acc;
+    }
+
+    const currency = getInvoiceCurrency(invoice);
+    const currentAmount = Number(invoice.total_amount || 0);
+
+    acc[currency] = (acc[currency] || 0) + currentAmount;
+    return acc;
+  }, {});
+
+  return Object.entries(totals)
+    .map(([currency, amount]) => ({ currency, amount }))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
 export default function AgencyDashboardPage() {
@@ -36,8 +79,8 @@ export default function AgencyDashboardPage() {
     clients: 0,
     projects: 0,
     invoices: 0,
-    unpaidAmount: 0,
-    paidAmount: 0,
+    unpaidTotals: [],
+    paidTotals: [],
   });
 
   const [recentVas, setRecentVas] = useState([]);
@@ -48,6 +91,8 @@ export default function AgencyDashboardPage() {
   useEffect(() => {
     if (profile?.organization_id) {
       loadDashboard();
+    } else {
+      setLoading(false);
     }
   }, [profile]);
 
@@ -92,7 +137,15 @@ export default function AgencyDashboardPage() {
 
       supabase
         .from("invoices")
-        .select("total_amount, status")
+        .select(
+          `
+          total_amount,
+          status,
+          clients (
+            currency
+          )
+        `
+        )
         .eq("organization_id", orgId),
 
       supabase
@@ -105,7 +158,7 @@ export default function AgencyDashboardPage() {
 
       supabase
         .from("clients")
-        .select("id, name, email, hourly_rate, created_at")
+        .select("id, name, email, currency, hourly_rate, created_at")
         .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
         .limit(5),
@@ -122,7 +175,8 @@ export default function AgencyDashboardPage() {
           clients (
             id,
             name,
-            email
+            email,
+            currency
           )
         `
         )
@@ -144,7 +198,9 @@ export default function AgencyDashboardPage() {
           clients (
             id,
             name,
-            email
+            email,
+            currency,
+            hourly_rate
           )
         `
         )
@@ -173,27 +229,13 @@ export default function AgencyDashboardPage() {
 
     const invoiceAmounts = invoicesAmountResult.data || [];
 
-    const unpaidAmount = invoiceAmounts.reduce((sum, invoice) => {
-      if (invoice.status === "paid" || invoice.status === "cancelled") {
-        return sum;
-      }
-
-      return sum + Number(invoice.total_amount || 0);
-    }, 0);
-
-    const paidAmount = invoiceAmounts.reduce((sum, invoice) => {
-      if (invoice.status !== "paid") return sum;
-
-      return sum + Number(invoice.total_amount || 0);
-    }, 0);
-
     setStats({
       vas: vasCountResult.count || 0,
       clients: clientsCountResult.count || 0,
       projects: projectsCountResult.count || 0,
       invoices: invoicesCountResult.count || 0,
-      unpaidAmount,
-      paidAmount,
+      unpaidTotals: getInvoiceTotalsByCurrency(invoiceAmounts, "unpaid"),
+      paidTotals: getInvoiceTotalsByCurrency(invoiceAmounts, "paid"),
     });
 
     setRecentVas(vasResult.data || []);
@@ -202,13 +244,6 @@ export default function AgencyDashboardPage() {
     setRecentInvoices(invoicesResult.data || []);
 
     setLoading(false);
-  }
-
-  function formatCurrency(amount) {
-    return new Intl.NumberFormat("en-PH", {
-      style: "currency",
-      currency: "PHP",
-    }).format(amount || 0);
   }
 
   function formatDate(date) {
@@ -336,16 +371,16 @@ export default function AgencyDashboardPage() {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <MoneyCard
               title="Unpaid Amount"
-              value={formatCurrency(stats.unpaidAmount)}
-              description="Invoices waiting for payment"
+              value={<CurrencyTotals totals={stats.unpaidTotals} />}
+              description="Grouped by client invoice currency"
               icon={<AlertCircle size={22} />}
               tone="orange"
             />
 
             <MoneyCard
               title="Paid Amount"
-              value={formatCurrency(stats.paidAmount)}
-              description="Collected invoice value"
+              value={<CurrencyTotals totals={stats.paidTotals} />}
+              description="Grouped by client invoice currency"
               icon={<CheckCircle size={22} />}
               tone="green"
             />
@@ -410,35 +445,40 @@ export default function AgencyDashboardPage() {
                 <EmptyText text="No projects yet." />
               ) : (
                 <div className="space-y-3">
-                  {recentProjects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="rounded-xl border border-slate-200 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h3 className="truncate font-semibold text-slate-900">
-                            {project.name}
-                          </h3>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {project.clients?.name || "No client"}
-                          </p>
+                  {recentProjects.map((project) => {
+                    const client = getRelatedClient(project);
+
+                    return (
+                      <div
+                        key={project.id}
+                        className="rounded-xl border border-slate-200 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate font-semibold text-slate-900">
+                              {project.name}
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {client?.name || "No client"}
+                              {client?.currency ? ` • ${client.currency}` : ""}
+                            </p>
+                          </div>
+
+                          <span
+                            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${getProjectBadge(
+                              project.status
+                            )}`}
+                          >
+                            {project.status || "active"}
+                          </span>
                         </div>
 
-                        <span
-                          className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${getProjectBadge(
-                            project.status
-                          )}`}
-                        >
-                          {project.status || "active"}
-                        </span>
+                        <p className="mt-3 line-clamp-2 text-sm text-slate-500">
+                          {project.description || "No description"}
+                        </p>
                       </div>
-
-                      <p className="mt-3 line-clamp-2 text-sm text-slate-500">
-                        {project.description || "No description"}
-                      </p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </DashboardPanel>
@@ -469,13 +509,16 @@ export default function AgencyDashboardPage() {
                             {client.name}
                           </p>
                           <p className="truncate text-sm text-slate-500">
-                            {client.company_name || client.email || "No details"}
+                            {client.email || "No details"}
                           </p>
                         </div>
                       </div>
 
                       <p className="shrink-0 text-sm font-semibold text-slate-700">
-                        {formatCurrency(client.hourly_rate)} / hr
+                        {safeFormatMoney(
+                          client.hourly_rate,
+                          client.currency || DEFAULT_CURRENCY
+                        )} / hr
                       </p>
                     </div>
                   ))}
@@ -492,52 +535,58 @@ export default function AgencyDashboardPage() {
                 <EmptyText text="No invoices yet." />
               ) : (
                 <div className="space-y-3">
-                  {recentInvoices.map((invoice) => (
-                    <div
-                      key={invoice.id}
-                      className="rounded-xl border border-slate-200 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-semibold text-slate-900">
-                            {invoice.invoice_number ||
-                              `Invoice ${invoice.id.slice(0, 8)}`}
-                          </h3>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {invoice.clients?.name || "No client"}
+                  {recentInvoices.map((invoice) => {
+                    const client = getRelatedClient(invoice);
+                    const currency = getInvoiceCurrency(invoice);
+
+                    return (
+                      <div
+                        key={invoice.id}
+                        className="rounded-xl border border-slate-200 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-semibold text-slate-900">
+                              {invoice.invoice_number ||
+                                `Invoice ${invoice.id.slice(0, 8)}`}
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {client?.name || "No client"} • {currency}
+                            </p>
+                          </div>
+
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${getInvoiceBadge(
+                              invoice.status
+                            )}`}
+                          >
+                            {invoice.status || "draft"}
+                          </span>
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between">
+                          <p className="font-semibold text-slate-900">
+                            {safeFormatMoney(invoice.total_amount, currency)}
+                          </p>
+
+                          <p className="text-xs text-slate-400">
+                            Due: {formatDate(invoice.due_date)}
                           </p>
                         </div>
 
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-medium ${getInvoiceBadge(
-                            invoice.status
-                          )}`}
-                        >
-                          {invoice.status || "draft"}
-                        </span>
+                        {invoice.public_token && (
+                          <a
+                            href={`/public-invoice/${invoice.public_token}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-3 inline-block text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            View public invoice
+                          </a>
+                        )}
                       </div>
-
-                      <div className="mt-4 flex items-center justify-between">
-                        <p className="font-semibold text-slate-900">
-                          {formatCurrency(invoice.total_amount)}
-                        </p>
-
-                        <p className="text-xs text-slate-400">
-                          Due: {formatDate(invoice.due_date)}
-                        </p>
-                      </div>
-
-                      {invoice.public_token && (
-                        <a
-                          href={`/public-invoice/${invoice.public_token}`}
-                          target="_blank"
-                          className="mt-3 inline-block text-xs font-medium text-blue-600 hover:underline"
-                        >
-                          View public invoice
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </DashboardPanel>
@@ -588,7 +637,7 @@ function MoneyCard({ title, value, description, icon, tone }) {
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-slate-500">{title}</p>
-          <h3 className="mt-3 text-3xl font-bold text-slate-900">{value}</h3>
+          <div className="mt-3">{value}</div>
           <p className="mt-1 text-sm text-slate-400">{description}</p>
         </div>
 
@@ -596,6 +645,25 @@ function MoneyCard({ title, value, description, icon, tone }) {
           {icon}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CurrencyTotals({ totals }) {
+  if (!totals || totals.length === 0) {
+    return <p className="text-3xl font-bold text-slate-900">—</p>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {totals.map((item) => (
+        <p key={item.currency} className="text-2xl font-bold text-slate-900">
+          {safeFormatMoney(item.amount, item.currency)}
+          <span className="ml-2 align-middle text-xs font-semibold uppercase text-slate-400">
+            {item.currency}
+          </span>
+        </p>
+      ))}
     </div>
   );
 }

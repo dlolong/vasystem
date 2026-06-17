@@ -116,6 +116,7 @@ export default function AddTimeDialog({
         hourly_rate: Number(selectedClient.hourly_rate || 0),
         billable: form.billable,
         invoiced: false,
+        currency: selectedClient?.currency || "USD",
       })
       .select()
       .single();

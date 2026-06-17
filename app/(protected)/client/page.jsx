@@ -55,7 +55,7 @@ export default function ClientDashboardPage() {
 
     let clientQuery = supabase
       .from("clients")
-      .select("id, name, email, organization_id, user_id, status")
+      .select("id, name, email, currency, organization_id, user_id, status")
       .limit(1);
 
     if (orgId) {

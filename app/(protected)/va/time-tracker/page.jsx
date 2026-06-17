@@ -12,6 +12,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
 import AddTimeDialog from "@/components/va/AddTimeDialog";
+import { formatMoney } from "@/lib/currency";
 
 const PAGE_SIZE = 10;
 
@@ -83,7 +84,18 @@ export default function VaTimeTrackerPage() {
   async function loadClients(userId, orgId = null) {
     let query = supabase
       .from("clients")
-      .select("*")
+      .select(
+        `
+        id,
+        name,
+        email,
+        currency,
+        hourly_rate,
+        organization_id,
+        user_id,
+        status
+      `
+      )
       .eq("status", "active")
       .order("name", { ascending: true });
 
@@ -101,7 +113,12 @@ export default function VaTimeTrackerPage() {
       return;
     }
 
-    setClients(data || []);
+    setClients(
+      (data || []).map((client) => ({
+        ...client,
+        currency: normalizeCurrency(client.currency),
+      }))
+    );
   }
 
   async function loadTimeLogs() {
@@ -121,6 +138,7 @@ export default function VaTimeTrackerPage() {
           id,
           name,
           email,
+          currency,
           hourly_rate
         )
       `,
@@ -138,16 +156,20 @@ export default function VaTimeTrackerPage() {
       return;
     }
 
-    setTimeLogs(data || []);
+    const normalizedLogs = (data || []).map((log) => ({
+      ...log,
+      currency: getLogCurrency(log),
+      clients: log.clients
+        ? {
+            ...log.clients,
+            currency: normalizeCurrency(log.clients.currency),
+          }
+        : log.clients,
+    }));
+
+    setTimeLogs(normalizedLogs);
     setTotalLogs(count || 0);
     setLoading(false);
-  }
-
-  function formatCurrency(amount) {
-    return new Intl.NumberFormat("en-PH", {
-      style: "currency",
-      currency: "PHP",
-    }).format(amount || 0);
   }
 
   function formatDate(date) {
@@ -208,14 +230,12 @@ export default function VaTimeTrackerPage() {
       return sum + getHours(log.duration);
     }, 0);
 
-    const totalAmount = timeLogs.reduce((sum, log) => {
-      if (log.billable === false) return sum;
-      return sum + getAmount(log);
-    }, 0);
+    const billableLogs = timeLogs.filter((log) => log.billable !== false);
+    const billableTotals = groupTotalsByLogCurrency(billableLogs);
 
     return {
       totalHours,
-      totalAmount,
+      billableTotals,
       totalEntries: totalLogs,
     };
   }, [timeLogs, totalLogs]);
@@ -260,8 +280,8 @@ export default function VaTimeTrackerPage() {
 
         <StatCard
           title="Billable Amount"
-          value={formatCurrency(summary.totalAmount)}
-          description="Amount on this page"
+          value={<CurrencyTotals totals={summary.billableTotals} />}
+          description="Grouped by client currency"
           icon={<Wallet size={20} />}
         />
 
@@ -277,7 +297,8 @@ export default function VaTimeTrackerPage() {
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-900">Time Logs</h2>
           <p className="text-sm text-slate-500">
-            Entries are grouped by month.
+            Entries are grouped by month and amounts use each client&apos;s
+            currency.
           </p>
         </div>
 
@@ -308,53 +329,63 @@ export default function VaTimeTrackerPage() {
                 </div>
 
                 <div className="divide-y divide-slate-100">
-                  {logs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.2fr_1fr_120px_140px]"
-                    >
-                      <div>
-                        <h4 className="font-semibold text-slate-900">
-                          {log.clients?.name || "No client"}
-                        </h4>
+                  {logs.map((log) => {
+                    const currency = getLogCurrency(log);
+                    const amount = getAmount(log);
 
-                        <p className="mt-1 text-sm text-slate-500">
-                          {log.description || "No description"}
-                        </p>
+                    return (
+                      <div
+                        key={log.id}
+                        className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.2fr_1fr_120px_160px] lg:items-center"
+                      >
+                        <div>
+                          <h4 className="font-semibold text-slate-900">
+                            {log.clients?.name || "No client"}
+                          </h4>
 
-                        <p className="mt-2 text-xs text-slate-400">
-                          {formatDate(log.start_time)}
-                        </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {log.description || "No description"}
+                          </p>
+
+                          <p className="mt-2 text-xs text-slate-400">
+                            {formatDate(log.start_time)}
+                          </p>
+                        </div>
+
+                        <div className="text-sm text-slate-600">
+                          <p>
+                            {formatTime(log.start_time)} -{" "}
+                            {formatTime(log.end_time)}
+                          </p>
+
+                          <p className="mt-1 text-xs text-slate-400">
+                            {log.billable === false
+                              ? "Non-billable"
+                              : "Billable"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-sm text-slate-500">Hours</p>
+                          <p className="font-semibold text-slate-900">
+                            {getHours(log.duration).toFixed(2)}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-sm text-slate-500">Amount</p>
+                          <p className="font-semibold text-slate-900">
+                            {log.billable === false
+                              ? "—"
+                              : formatMoney(amount, currency)}
+                          </p>
+                          <p className="mt-1 text-xs font-medium text-slate-400">
+                            {currency}
+                          </p>
+                        </div>
                       </div>
-
-                      <div className="text-sm text-slate-600">
-                        <p>
-                          {formatTime(log.start_time)} -{" "}
-                          {formatTime(log.end_time)}
-                        </p>
-
-                        <p className="mt-1 text-xs text-slate-400">
-                          {log.billable === false
-                            ? "Non-billable"
-                            : "Billable"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-sm text-slate-500">Hours</p>
-                        <p className="font-semibold text-slate-900">
-                          {getHours(log.duration).toFixed(2)}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-sm text-slate-500">Amount</p>
-                        <p className="font-semibold text-slate-900">
-                          {formatCurrency(getAmount(log))}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -394,17 +425,80 @@ export default function VaTimeTrackerPage() {
   );
 }
 
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
+}
+
+function getLogCurrency(log) {
+  return normalizeCurrency(
+    log?.currency || log?.clients?.currency || log?.client?.currency || "USD"
+  );
+}
+
+function getLogAmount(log) {
+  const hours = Number(log.duration || 0) / 3600;
+  const rate = Number(log.hourly_rate || log.clients?.hourly_rate || 0);
+
+  return hours * rate;
+}
+
+function groupTotalsByLogCurrency(logs = []) {
+  return logs.reduce((totals, log) => {
+    const currency = getLogCurrency(log);
+    const amount = getLogAmount(log);
+
+    if (!totals[currency]) {
+      totals[currency] = 0;
+    }
+
+    totals[currency] += amount;
+
+    return totals;
+  }, {});
+}
+
+function CurrencyTotals({ totals }) {
+  const entries = Object.entries(totals || {});
+
+  if (entries.length === 0) {
+    return (
+      <div>
+        <p className="font-bold text-slate-900">{formatMoney(0, "USD")}</p>
+        <p className="text-xs font-medium text-slate-400">USD</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {entries.map(([currency, amount]) => (
+        <div key={currency}>
+          <p className="font-bold text-slate-900">
+            {formatMoney(amount, currency)}
+          </p>
+          <p className="text-xs font-medium text-slate-400">{currency}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StatCard({ title, value, description, icon }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-500">{title}</p>
-        <div className="text-blue-600">{icon}</div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-500">{title}</p>
+
+          <div className="mt-3 text-2xl font-bold text-slate-900">
+            {value}
+          </div>
+
+          <p className="mt-1 text-sm text-slate-400">{description}</p>
+        </div>
+
+        <div className="shrink-0 text-blue-600">{icon}</div>
       </div>
-
-      <h3 className="mt-3 text-2xl font-bold text-slate-900">{value}</h3>
-
-      <p className="mt-1 text-sm text-slate-400">{description}</p>
     </div>
   );
 }
