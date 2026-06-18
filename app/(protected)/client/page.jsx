@@ -10,19 +10,25 @@ import {
   ArrowRight,
   ExternalLink,
   AlertCircle,
+  Save,
+  Loader2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
+import { CURRENCY_OPTIONS, formatMoney } from "@/lib/currency";
 
 export default function ClientDashboardPage() {
   const { showToast } = useAppContext();
 
   const [loading, setLoading] = useState(true);
+  const [savingCurrency, setSavingCurrency] = useState(false);
+
   const [authUser, setAuthUser] = useState(null);
   const [userRow, setUserRow] = useState(null);
   const [clientRecord, setClientRecord] = useState(null);
 
-  const [projects, setProjects] = useState([]);
+  const [selectedCurrency, setSelectedCurrency] = useState("USD");
+
   const [invoices, setInvoices] = useState([]);
 
   useEffect(() => {
@@ -55,7 +61,17 @@ export default function ClientDashboardPage() {
 
     let clientQuery = supabase
       .from("clients")
-      .select("id, name, email, currency, organization_id, user_id, status")
+      .select(
+        `
+        id,
+        name,
+        email,
+        currency,
+        organization_id,
+        user_id,
+        status
+      `
+      )
       .limit(1);
 
     if (orgId) {
@@ -63,10 +79,13 @@ export default function ClientDashboardPage() {
         .eq("organization_id", orgId)
         .or(`user_id.eq.${user.id},email.eq.${user.email}`);
     } else {
-      clientQuery = clientQuery.or(`user_id.eq.${user.id},email.eq.${user.email}`);
+      clientQuery = clientQuery.or(
+        `user_id.eq.${user.id},email.eq.${user.email}`
+      );
     }
 
-    const { data: clientData, error: clientError } = await clientQuery.maybeSingle();
+    const { data: clientData, error: clientError } =
+      await clientQuery.maybeSingle();
 
     if (clientError) {
       showToast(clientError.message, "error");
@@ -74,32 +93,23 @@ export default function ClientDashboardPage() {
       return;
     }
 
-    setClientRecord(clientData || null);
+    const normalizedClient = clientData
+      ? {
+          ...clientData,
+          currency: normalizeCurrency(clientData.currency),
+        }
+      : null;
 
-    if (!clientData) {
-      setProjects([]);
+    setClientRecord(normalizedClient);
+    setSelectedCurrency(normalizedClient?.currency || "USD");
+
+    if (!normalizedClient) {
       setInvoices([]);
       setLoading(false);
       return;
     }
 
-    const [projectsResult, invoicesResult] = await Promise.all([
-      supabase
-        .from("projects")
-        .select(
-          `
-          id,
-          name,
-          description,
-          status,
-          created_at,
-          client_id
-        `
-        )
-        .eq("client_id", clientData.id)
-        .order("created_at", { ascending: false })
-        .limit(6),
-
+    const [invoicesResult] = await Promise.all([
       supabase
         .from("invoices")
         .select(
@@ -112,25 +122,81 @@ export default function ClientDashboardPage() {
           public_token,
           payment_link,
           created_at,
-          client_id
+          client_id,
+          currency
         `
         )
-        .eq("client_id", clientData.id)
+        .eq("client_id", normalizedClient.id)
         .order("created_at", { ascending: false })
         .limit(6),
     ]);
-
-    if (projectsResult.error) {
-      showToast(projectsResult.error.message, "error");
-    }
 
     if (invoicesResult.error) {
       showToast(invoicesResult.error.message, "error");
     }
 
-    setProjects(projectsResult.data || []);
-    setInvoices(invoicesResult.data || []);
+    setInvoices(
+      (invoicesResult.data || []).map((invoice) => ({
+        ...invoice,
+        currency: normalizeCurrency(
+          invoice.currency || normalizedClient.currency
+        ),
+      }))
+    );
+
     setLoading(false);
+  }
+
+  async function saveClientCurrency() {
+    if (!clientRecord?.id) {
+      showToast("Client record not found.", "error");
+      return;
+    }
+
+    const currency = normalizeCurrency(selectedCurrency);
+
+    setSavingCurrency(true);
+
+    const { data, error } = await supabase
+      .from("clients")
+      .update({ currency })
+      .eq("id", clientRecord.id)
+      .select(
+        `
+        id,
+        name,
+        email,
+        currency,
+        organization_id,
+        user_id,
+        status
+      `
+      )
+      .single();
+
+    if (error) {
+      showToast(error.message, "error");
+      setSavingCurrency(false);
+      return;
+    }
+
+    const normalizedClient = {
+      ...data,
+      currency: normalizeCurrency(data.currency),
+    };
+
+    setClientRecord(normalizedClient);
+    setSelectedCurrency(normalizedClient.currency);
+
+    setInvoices((prev) =>
+      prev.map((invoice) => ({
+        ...invoice,
+        currency: normalizedClient.currency,
+      }))
+    );
+
+    showToast("Currency preference updated.", "success");
+    setSavingCurrency(false);
   }
 
   const summary = useMemo(() => {
@@ -149,19 +215,15 @@ export default function ClientDashboardPage() {
     }, 0);
 
     return {
-      totalProjects: projects.length,
       totalInvoices: invoices.length,
       unpaidInvoices: unpaidInvoices.length,
       unpaidAmount,
       paidAmount,
     };
-  }, [projects, invoices]);
+  }, [invoices]);
 
   function formatCurrency(amount) {
-    return new Intl.NumberFormat("en-PH", {
-      style: "currency",
-      currency: "PHP",
-    }).format(amount || 0);
+    return formatMoney(amount, normalizeCurrency(selectedCurrency));
   }
 
   function formatDate(date) {
@@ -230,28 +292,19 @@ export default function ClientDashboardPage() {
   }
 
   return (
-    <main className="space-y-6">
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+  <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
+      <div className="flex shrink-0 flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
             Client Dashboard
           </h1>
 
           <p className="text-sm text-slate-500">
-            Welcome, {clientRecord.name || authUser?.email}. View your projects
-            and invoices here.
+            Welcome, {clientRecord.name || authUser?.email}. View your invoices here.
           </p>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Link
-            href="/client/projects"
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <FolderKanban size={18} />
-            View Projects
-          </Link>
-
           <Link
             href="/client/invoices"
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
@@ -262,15 +315,63 @@ export default function ClientDashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Projects"
-          value={summary.totalProjects}
-          description="Assigned projects"
-          icon={<FolderKanban size={20} />}
-          color="violet"
-        />
+      <section className="rounded-2xl border border-blue-100 bg-blue-50 p-5">
+        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
+              Currency Preference
+            </p>
 
+            <h2 className="mt-1 text-lg font-bold text-blue-950">
+              Amounts are displayed in {normalizeCurrency(selectedCurrency)}
+            </h2>
+
+            <p className="mt-1 text-sm text-blue-700">
+              Choose your preferred billing currency. Future invoices should use
+              this client currency when generated.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <select
+              value={selectedCurrency}
+              onChange={(e) => setSelectedCurrency(e.target.value)}
+              className="min-w-64 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            >
+              {CURRENCY_OPTIONS.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.label}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={saveClientCurrency}
+              disabled={
+                savingCurrency ||
+                normalizeCurrency(selectedCurrency) ===
+                  normalizeCurrency(clientRecord.currency)
+              }
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {savingCurrency ? (
+                <>
+                  <Loader2 size={17} className="animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save size={17} />
+                  Save Currency
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <StatCard
           title="Invoices"
           value={summary.totalInvoices}
@@ -290,55 +391,20 @@ export default function ClientDashboardPage() {
         <StatCard
           title="Amount Due"
           value={formatCurrency(summary.unpaidAmount)}
-          description="Unpaid balance"
+          description={`Unpaid balance in ${normalizeCurrency(
+            selectedCurrency
+          )}`}
           icon={<Wallet size={20} />}
           color="emerald"
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <DashboardPanel
-          title="Recent Projects"
-          description="Latest projects assigned to you."
-          href="/client/projects"
-        >
-          {projects.length === 0 ? (
-            <EmptyText text="No projects yet." />
-          ) : (
-            <div className="space-y-3">
-              {projects.map((project) => (
-                <div
-                  key={project.id}
-                  className="rounded-xl border border-slate-200 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="truncate font-semibold text-slate-900">
-                        {project.name}
-                      </h3>
-
-                      <p className="mt-1 line-clamp-2 text-sm text-slate-500">
-                        {project.description || "No description"}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${getProjectBadge(
-                        project.status
-                      )}`}
-                    >
-                      {project.status || "active"}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </DashboardPanel>
-
+      <div className="grid grid-cols-1 gap-6">
         <DashboardPanel
           title="Recent Invoices"
-          description="Latest invoices from your agency."
+          description={`Latest invoices shown in ${normalizeCurrency(
+            selectedCurrency
+          )}.`}
           href="/client/invoices"
         >
           {invoices.length === 0 ? (
@@ -372,9 +438,15 @@ export default function ClientDashboardPage() {
                   </div>
 
                   <div className="mt-4 flex items-center justify-between gap-3">
-                    <p className="font-semibold text-slate-900">
-                      {formatCurrency(invoice.total_amount)}
-                    </p>
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        {formatCurrency(invoice.total_amount)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Preferred currency:{" "}
+                        {normalizeCurrency(selectedCurrency)}
+                      </p>
+                    </div>
 
                     {invoice.public_token && (
                       <a
@@ -397,6 +469,10 @@ export default function ClientDashboardPage() {
   );
 }
 
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
+}
+
 function StatCard({ title, value, description, icon, color = "blue" }) {
   const colors = {
     blue: "bg-blue-50 border-blue-100 text-blue-600",
@@ -411,9 +487,7 @@ function StatCard({ title, value, description, icon, color = "blue" }) {
         <div>
           <p className="text-sm font-medium text-slate-500">{title}</p>
 
-          <h3 className="mt-3 text-2xl font-bold text-slate-900">
-            {value}
-          </h3>
+          <h3 className="mt-3 text-2xl font-bold text-slate-900">{value}</h3>
 
           <p className="mt-1 text-sm text-slate-400">{description}</p>
         </div>

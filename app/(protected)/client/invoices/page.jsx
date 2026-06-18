@@ -8,9 +8,11 @@ import {
   Clock,
   ExternalLink,
   AlertCircle,
+  CheckCircle2, Loader2
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
+import { formatMoney } from "@/lib/currency";
 
 const PAGE_SIZE = 8;
 
@@ -35,6 +37,9 @@ export default function ClientInvoicesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [payingInvoiceId, setPayingInvoiceId] = useState(null);
+
+  const selectedCurrency = normalizeCurrency(clientRecord?.currency);
 
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(totalInvoices / PAGE_SIZE), 1);
@@ -73,7 +78,7 @@ export default function ClientInvoicesPage() {
     if (clientRecord?.id) {
       loadInvoices();
     }
-  }, [clientRecord, page, search, statusFilter]);
+  }, [clientRecord?.id, page, search, statusFilter]);
 
   async function loadClient() {
     setLoading(true);
@@ -101,7 +106,17 @@ export default function ClientInvoicesPage() {
 
     const { data: clientByUser } = await supabase
       .from("clients")
-      .select("*")
+      .select(
+        `
+        id,
+        name,
+        email,
+        currency,
+        organization_id,
+        user_id,
+        status
+      `
+      )
       .eq("user_id", user.id)
       .limit(1);
 
@@ -112,7 +127,17 @@ export default function ClientInvoicesPage() {
     if (!foundClient && user.email) {
       let emailQuery = supabase
         .from("clients")
-        .select("*")
+        .select(
+          `
+          id,
+          name,
+          email,
+          currency,
+          organization_id,
+          user_id,
+          status
+        `
+        )
         .eq("email", user.email)
         .limit(1);
 
@@ -127,7 +152,15 @@ export default function ClientInvoicesPage() {
       }
     }
 
-    setClientRecord(foundClient || null);
+    setClientRecord(
+      foundClient
+        ? {
+            ...foundClient,
+            currency: normalizeCurrency(foundClient.currency),
+          }
+        : null
+    );
+
     setLoading(false);
   }
 
@@ -139,12 +172,40 @@ export default function ClientInvoicesPage() {
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    let query = supabase
-      .from("invoices")
-      .select("*", { count: "exact" })
-      .eq("client_id", clientRecord.id)
-      .order("created_at", { ascending: false })
-      .range(from, to);
+   let query = supabase
+  .from("invoices")
+  .select(
+    `
+    id,
+    invoice_number,
+    total_amount,
+    status,
+    due_date,
+    public_token,
+    payment_link,
+    created_at,
+    client_id,
+    currency,
+    creator_type,
+    creator_id,
+    creator_display_name,
+    creator_bank_name,
+    creator_bank_account_name,
+    creator_bank_account_number,
+    creator_bank_account_type,
+    creator_bank_branch,
+    creator_bank_swift_code,
+    creator_bank_notes,
+    payment_method,
+    payment_reference,
+    payment_notes,
+    paid_at
+  `,
+    { count: "exact" }
+  )
+  .eq("client_id", clientRecord.id)
+  .order("created_at", { ascending: false })
+  .range(from, to);
 
     if (search.trim()) {
       query = query.or(`invoice_number.ilike.%${search.trim()}%`);
@@ -164,16 +225,96 @@ export default function ClientInvoicesPage() {
       return;
     }
 
-    setInvoices(data || []);
+    setInvoices(
+      (data || []).map((invoice) => ({
+        ...invoice,
+        currency: normalizeCurrency(invoice.currency || clientRecord.currency),
+      }))
+    );
+
     setTotalInvoices(count || 0);
     setLoading(false);
   }
 
+  async function markInvoicePaid(invoice) {
+  if (!invoice?.id) return;
+
+  const reference = window.prompt(
+    "Enter your bank transfer reference number, receipt number, or note:"
+  );
+
+  if (reference === null) return;
+
+  setPayingInvoiceId(invoice.id);
+
+  const { data, error } = await supabase.rpc("mark_invoice_paid", {
+    p_invoice_id: invoice.id,
+    p_payment_reference: reference,
+    p_payment_notes: "Marked as paid by client.",
+  });
+
+  if (error) {
+    showToast(error.message, "error");
+    setPayingInvoiceId(null);
+    return;
+  }
+
+  showToast("Invoice marked as paid.", "success");
+
+  setInvoices((prev) =>
+    prev.map((item) =>
+      item.id === invoice.id
+        ? {
+            ...item,
+            ...data,
+            status: "paid",
+            payment_reference: reference,
+            paid_at: new Date().toISOString(),
+          }
+        : item
+    )
+  );
+
+  setPayingInvoiceId(null);
+}
+
+const creatorGroups = useMemo(() => {
+  const groups = {};
+
+  invoices.forEach((invoice) => {
+    const type = invoice.creator_type || (invoice.user_id ? "va" : "agency");
+    const name =
+      invoice.creator_display_name ||
+      (type === "va" ? "Virtual Assistant" : "Agency");
+
+    const key = `${type}-${invoice.creator_id || name}`;
+
+    if (!groups[key]) {
+      groups[key] = {
+        key,
+        type,
+        name,
+        bank: {
+          bank_name: invoice.creator_bank_name,
+          bank_account_name: invoice.creator_bank_account_name,
+          bank_account_number: invoice.creator_bank_account_number,
+          bank_account_type: invoice.creator_bank_account_type,
+          bank_branch: invoice.creator_bank_branch,
+          bank_swift_code: invoice.creator_bank_swift_code,
+          bank_notes: invoice.creator_bank_notes,
+        },
+        invoices: [],
+      };
+    }
+
+    groups[key].invoices.push(invoice);
+  });
+
+  return Object.values(groups);
+}, [invoices]);
+
   function formatCurrency(amount) {
-    return new Intl.NumberFormat("en-PH", {
-      style: "currency",
-      currency: "PHP",
-    }).format(amount || 0);
+    return formatMoney(amount, selectedCurrency);
   }
 
   function formatDate(date) {
@@ -226,12 +367,24 @@ export default function ClientInvoicesPage() {
   }
 
   return (
-    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6 overflow-hidden">
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
       <div className="flex shrink-0 flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Invoices</h1>
           <p className="text-sm text-slate-500">
             View invoices sent to {clientRecord?.name || "your account"}.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">
+            Selected Currency
+          </p>
+          <p className="mt-1 text-2xl font-bold text-blue-900">
+            {selectedCurrency}
+          </p>
+          <p className="mt-1 text-xs text-blue-700">
+            Amounts are displayed using your client currency.
           </p>
         </div>
       </div>
@@ -240,7 +393,7 @@ export default function ClientInvoicesPage() {
         <StatCard
           title="Visible Total"
           value={formatCurrency(summary.visibleTotal)}
-          description="Invoices on this page"
+          description={`Invoices on this page in ${selectedCurrency}`}
           icon={<FileText size={20} />}
           color="blue"
         />
@@ -248,7 +401,7 @@ export default function ClientInvoicesPage() {
         <StatCard
           title="Unpaid Amount"
           value={formatCurrency(summary.unpaidAmount)}
-          description="Waiting for payment"
+          description={`Waiting for payment in ${selectedCurrency}`}
           icon={<Wallet size={20} />}
           color="orange"
         />
@@ -262,7 +415,7 @@ export default function ClientInvoicesPage() {
         />
       </div>
 
-      <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="flex flex-1 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="shrink-0 border-b border-slate-200 p-5">
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px]">
             <div className="relative">
@@ -300,7 +453,7 @@ export default function ClientInvoicesPage() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="">
           {loading ? (
             <SkeletonList />
           ) : invoices.length === 0 ? (
@@ -310,65 +463,128 @@ export default function ClientInvoicesPage() {
               description="There are no invoices assigned to you yet."
             />
           ) : (
-            <div className="divide-y divide-slate-100">
-              {invoices.map((invoice) => (
-                <div
-                  key={invoice.id}
-                  className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.2fr_1fr_160px_170px]"
+           <div className="space-y-5 p-5">
+  {creatorGroups.map((group) => (
+    <section
+      key={group.key}
+      className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+    >
+      <div className="border-b border-slate-200 bg-slate-50 p-5">
+        <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {group.type === "va" ? "Virtual Assistant" : "Agency"}
+            </p>
+
+            <h2 className="mt-1 text-lg font-bold text-slate-900">
+              {group.name}
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500">
+              {group.invoices.length} invoice
+              {group.invoices.length === 1 ? "" : "s"} created
+            </p>
+          </div>
+
+          <BankMiniDetails bank={group.bank} />
+        </div>
+      </div>
+
+      <div className="divide-y divide-slate-100">
+        {group.invoices.map((invoice) => {
+          const invoiceCurrency = normalizeCurrency(
+            clientRecord?.currency || invoice.currency
+          );
+
+          return (
+            <div
+              key={invoice.id}
+              className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.3fr_1fr_150px_230px]"
+            >
+              <div>
+                <h3 className="font-semibold text-slate-900">
+                  {invoice.invoice_number ||
+                    `Invoice ${invoice.id.slice(0, 8)}`}
+                </h3>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Created {formatDate(invoice.created_at)}
+                </p>
+
+                <p className="mt-2 text-xs text-slate-400">
+                  Due: {formatDate(invoice.due_date)}
+                </p>
+
+                {invoice.payment_reference && (
+                  <p className="mt-2 text-xs font-medium text-green-700">
+                    Payment ref: {invoice.payment_reference}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-sm text-slate-500">Amount</p>
+                <p className="font-semibold text-slate-900">
+                  {formatMoney(invoice.total_amount, invoiceCurrency)}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  {invoiceCurrency}
+                </p>
+              </div>
+
+              <div>
+                <p className="mb-2 text-sm text-slate-500">Status</p>
+
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusBadge(
+                    invoice.status
+                  )}`}
                 >
-                  <div>
-                    <h3 className="font-semibold text-slate-900">
-                      {invoice.invoice_number ||
-                        `Invoice ${invoice.id.slice(0, 8)}`}
-                    </h3>
+                  {invoice.status || "draft"}
+                </span>
+              </div>
 
-                    <p className="mt-1 text-sm text-slate-500">
-                      Created {formatDate(invoice.created_at)}
-                    </p>
+              <div className="flex flex-col gap-2 lg:items-end">
+                {invoice.public_token && (
+                  <a
+                    href={`/public-invoice/${invoice.public_token}`}
+                    target="_blank"
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    View Invoice
+                    <ExternalLink size={15} />
+                  </a>
+                )}
 
-                    <p className="mt-2 text-xs text-slate-400">
-                      Due: {formatDate(invoice.due_date)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-sm text-slate-500">Amount</p>
-                    <p className="font-semibold text-slate-900">
-                      {formatCurrency(invoice.total_amount)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="mb-2 text-sm text-slate-500">Status</p>
-
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusBadge(
-                        invoice.status
-                      )}`}
+                {invoice.status !== "paid" &&
+                  invoice.status !== "cancelled" && (
+                    <button
+                      type="button"
+                      onClick={() => markInvoicePaid(invoice)}
+                      disabled={payingInvoiceId === invoice.id}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {invoice.status || "draft"}
-                    </span>
-                  </div>
-
-                  <div className="flex items-start lg:justify-end">
-                    {invoice.public_token ? (
-                      <a
-                        href={`/public-invoice/${invoice.public_token}`}
-                        target="_blank"
-                        className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-                      >
-                        View Invoice
-                        <ExternalLink size={15} />
-                      </a>
-                    ) : (
-                      <span className="text-sm text-slate-400">
-                        No public link
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                      {payingInvoiceId === invoice.id ? (
+                        <>
+                          <Loader2 size={15} className="animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 size={15} />
+                          I Paid This
+                        </>
+                      )}
+                    </button>
+                  )}
+              </div>
             </div>
+          );
+        })}
+      </div>
+    </section>
+  ))}
+</div>
           )}
         </div>
 
@@ -383,6 +599,10 @@ export default function ClientInvoicesPage() {
       </section>
     </main>
   );
+}
+
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
 }
 
 function StatCard({ title, value, description, icon, color = "blue" }) {
@@ -437,7 +657,7 @@ function EmptyState({ icon, title, description }) {
 
 function Pagination({ page, totalPages, total, label, onPrev, onNext }) {
   return (
-    <div className="shrink-0 flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row">
+    <div className="flex shrink-0 flex-col items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row">
       <p className="text-sm text-slate-500">
         Page {page} of {totalPages} · {total} {label}
         {total === 1 ? "" : "s"}
@@ -462,6 +682,42 @@ function Pagination({ page, totalPages, total, label, onPrev, onNext }) {
           Next
         </button>
       </div>
+    </div>
+  );
+}
+
+function BankMiniDetails({ bank }) {
+  const hasBank =
+    bank?.bank_name || bank?.bank_account_name || bank?.bank_account_number;
+
+  if (!hasBank) {
+    return (
+      <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
+        No bank details provided yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+      <p className="font-semibold text-blue-700">Bank Transfer Details</p>
+
+      {bank.bank_name && <p className="mt-1">Bank: {bank.bank_name}</p>}
+      {bank.bank_account_name && (
+        <p>Account Name: {bank.bank_account_name}</p>
+      )}
+      {bank.bank_account_number && (
+        <p>Account No: {bank.bank_account_number}</p>
+      )}
+      {bank.bank_account_type && <p>Type: {bank.bank_account_type}</p>}
+      {bank.bank_branch && <p>Branch: {bank.bank_branch}</p>}
+      {bank.bank_swift_code && <p>Code: {bank.bank_swift_code}</p>}
+
+      {bank.bank_notes && (
+        <p className="mt-2 whitespace-pre-line text-blue-800">
+          {bank.bank_notes}
+        </p>
+      )}
     </div>
   );
 }

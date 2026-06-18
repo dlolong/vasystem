@@ -3,8 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function GET(request, { params }) {
   try {
-    const resolvedParams = await params;
-    const token = resolvedParams?.token;
+    const { token } = await params;
 
     if (!token) {
       return NextResponse.json(
@@ -56,11 +55,9 @@ export async function GET(request, { params }) {
 
     if (isVAInvoice) {
       items = await loadTimeLogItems(invoice.id, client);
-
       itemSource = items.length > 0 ? "time_logs" : "empty";
     } else if (isAgencyInvoice) {
       items = await loadInvoiceItems(invoice.id);
-
       itemSource = items.length > 0 ? "invoice_items" : "empty";
     } else {
       items = await loadInvoiceItems(invoice.id);

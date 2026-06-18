@@ -50,8 +50,7 @@ export default function GenerateInvoiceDialog({
         return clients.find((client) => client.id === form.client_id) || null;
     }, [clients, form.client_id]);
 
-    const selectedCurrency = normalizeCurrency(selectedClient?.currency);
-
+    const selectedCurrency = normalizeCurrency(selectedClient?.currency || "USD");
     const manualTotal = useMemo(() => {
         return manualItems.reduce((sum, item) => {
             const quantity = Number(item.quantity || 0);
@@ -277,6 +276,87 @@ export default function GenerateInvoiceDialog({
             });
     }
 
+    async function getCreatorBankSnapshot(userId, clientForInvoice) {
+        if (isAgency) {
+            const orgId = organizationId || clientForInvoice?.organization_id || null;
+
+            if (!orgId) {
+                return {
+                    creator_type: "agency",
+                    creator_id: null,
+                    creator_display_name: "Agency",
+                };
+            }
+
+            const { data, error } = await supabase
+                .from("organizations")
+                .select(
+                    `
+                    id,
+                    name,
+                    bank_name,
+                    bank_account_name,
+                    bank_account_number,
+                    bank_account_type,
+                    bank_branch,
+                    bank_swift_code,
+                    bank_notes
+                `
+                )
+                .eq("id", orgId)
+                .maybeSingle();
+
+            if (error) throw error;
+
+            return {
+                creator_type: "agency",
+                creator_id: data?.id || orgId,
+                creator_display_name: data?.name || "Agency",
+                creator_bank_name: data?.bank_name || null,
+                creator_bank_account_name: data?.bank_account_name || null,
+                creator_bank_account_number: data?.bank_account_number || null,
+                creator_bank_account_type: data?.bank_account_type || null,
+                creator_bank_branch: data?.bank_branch || null,
+                creator_bank_swift_code: data?.bank_swift_code || null,
+                creator_bank_notes: data?.bank_notes || null,
+            };
+        }
+
+        const { data, error } = await supabase
+            .from("users")
+            .select(
+                `
+            id,
+            email,
+            full_name,
+            bank_name,
+            bank_account_name,
+            bank_account_number,
+            bank_account_type,
+            bank_branch,
+            bank_swift_code,
+            bank_notes
+            `
+            )
+            .eq("id", userId)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        return {
+            creator_type: "va",
+            creator_id: userId,
+            creator_display_name: data?.full_name || data?.email || "Virtual Assistant",
+            creator_bank_name: data?.bank_name || null,
+            creator_bank_account_name: data?.bank_account_name || null,
+            creator_bank_account_number: data?.bank_account_number || null,
+            creator_bank_account_type: data?.bank_account_type || null,
+            creator_bank_branch: data?.bank_branch || null,
+            creator_bank_swift_code: data?.bank_swift_code || null,
+            creator_bank_notes: data?.bank_notes || null,
+        };
+    }
+
     async function handleGenerate(e) {
         e.preventDefault();
 
@@ -307,6 +387,10 @@ export default function GenerateInvoiceDialog({
             }
 
             const invoiceCurrency = normalizeCurrency(clientForInvoice.currency);
+            const creatorBankSnapshot = await getCreatorBankSnapshot(
+                user.id,
+                clientForInvoice
+            );
 
             let invoiceItems = [];
             let timeLogs = [];
@@ -344,7 +428,7 @@ export default function GenerateInvoiceDialog({
                     ? organizationId || clientForInvoice.organization_id || null
                     : clientForInvoice.organization_id || null,
                 client_id: form.client_id,
-                currency: invoiceCurrency,
+                currency: invoiceCurrency || "USD",
                 invoice_number: generateInvoiceNumber(),
                 public_token: publicToken,
                 payment_link: publicLink,
@@ -355,6 +439,17 @@ export default function GenerateInvoiceDialog({
                 tax,
                 status: form.status,
                 notes: form.notes || null,
+                creator_type: creatorBankSnapshot.creator_type,
+                creator_id: creatorBankSnapshot.creator_id,
+                creator_display_name: creatorBankSnapshot.creator_display_name,
+                creator_bank_name: creatorBankSnapshot.creator_bank_name,
+                creator_bank_account_name: creatorBankSnapshot.creator_bank_account_name,
+                creator_bank_account_number: creatorBankSnapshot.creator_bank_account_number,
+                creator_bank_account_type: creatorBankSnapshot.creator_bank_account_type,
+                creator_bank_branch: creatorBankSnapshot.creator_bank_branch,
+                creator_bank_swift_code: creatorBankSnapshot.creator_bank_swift_code,
+                creator_bank_notes: creatorBankSnapshot.creator_bank_notes,
+                payment_method: "bank_transfer",
             };
 
             const { data: invoice, error: invoiceError } = await supabase
@@ -459,8 +554,8 @@ export default function GenerateInvoiceDialog({
                 {message.text && (
                     <div
                         className={`rounded-2xl border px-4 py-3 text-sm ${message.type === "error"
-                                ? "border-red-200 bg-red-50 text-red-700"
-                                : "border-green-200 bg-green-50 text-green-700"
+                            ? "border-red-200 bg-red-50 text-red-700"
+                            : "border-green-200 bg-green-50 text-green-700"
                             }`}
                     >
                         {message.text}

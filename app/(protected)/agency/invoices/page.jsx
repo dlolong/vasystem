@@ -20,6 +20,8 @@ import GenerateInvoiceDialog from "@/components/invoices/GenerateInvoiceDialog";
 import InvoicePreviewDialog from "@/components/invoices/InvoicePreviewDialog";
 import InvoiceListItem from "@/components/invoices/InvoiceListItem";
 import { formatMoney, groupTotalsByCurrency } from "@/lib/currency";
+import BankAccountSettings from "@/components/settings/BankAccountSettings";
+
 const PAGE_SIZE = 8;
 
 const statusOptions = [
@@ -507,72 +509,80 @@ export default function AgencyInvoicesPage() {
         />
       </div>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-5">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px]">
-            <div className="relative">
-              <Search
-                size={18}
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-              />
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 p-5">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px]">
+              <div className="relative">
+                <Search
+                  size={18}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+                />
 
-              <input
-                value={search}
-                onChange={(e) => handleSearch(e.target.value)}
-                placeholder="Search invoice number..."
-                className="w-full rounded-xl border border-slate-300 py-3 pl-11 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              />
+                <input
+                  value={search}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  placeholder="Search invoice number..."
+                  className="w-full rounded-xl border border-slate-300 py-3 pl-11 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+              </div>
+
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="all">All Status</option>
+                {statusOptions.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
             </div>
+          </div>
 
-            <select
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              className="rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-            >
-              <option value="all">All Status</option>
-              {statusOptions.map((status) => (
-                <option key={status.value} value={status.value}>
-                  {status.label}
-                </option>
+          {loading ? (
+            <SkeletonGrid />
+          ) : invoices.length === 0 ? (
+            <EmptyState
+              icon={<FileText size={24} />}
+              title="No invoices found"
+              description="Add an invoice or try another search keyword."
+            />
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {invoices.map((invoice) => (
+                <InvoiceListItem
+                  key={invoice.id}
+                  invoice={invoice}
+                  formatDate={formatDate}
+                  onView={setSelectedInvoice}
+                  onStatusChange={updateInvoiceStatus}
+                />
               ))}
-            </select>
-          </div>
-        </div>
+            </div>
+          )}
 
-        {loading ? (
-          <SkeletonGrid />
-        ) : invoices.length === 0 ? (
-          <EmptyState
-            icon={<FileText size={24} />}
-            title="No invoices found"
-            description="Add an invoice or try another search keyword."
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={totalInvoices}
+            label="invoice"
+            onPrev={() => setPage((prev) => Math.max(prev - 1, 1))}
+            onNext={() => setPage((prev) => Math.min(prev + 1, totalPages))}
           />
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {invoices.map((invoice) => (
-              <InvoiceListItem
-                key={invoice.id}
-                invoice={invoice}
-                formatDate={formatDate}
-                onView={setSelectedInvoice}
-                onStatusChange={updateInvoiceStatus}
-              />
-            ))}
-          </div>
-        )}
+        </section>
 
-        <Pagination
-          page={page}
-          totalPages={totalPages}
-          total={totalInvoices}
-          label="invoice"
-          onPrev={() => setPage((prev) => Math.max(prev - 1, 1))}
-          onNext={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-        />
-      </section>
+        <div className="xl:sticky xl:top-24 xl:self-start">
+          <BankAccountSettings mode="agency" organizationId={profile?.organization_id} />
+        </div>
+      </div>
+
+
     </main>
   );
 }

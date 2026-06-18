@@ -29,53 +29,53 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
         }
     }, [open, invoice?.id]);
 
-   async function loadItems() {
-  setLoading(true);
+    async function loadItems() {
+        setLoading(true);
 
-  try {
-    let loadedItems = [];
+        try {
+            let loadedItems = [];
 
-    if (isVAInvoice) {
-      loadedItems = await loadTimeLogItems();
+            if (isVAInvoice) {
+                loadedItems = await loadTimeLogItems();
 
-      setItems(loadedItems);
-      setSource(loadedItems.length > 0 ? "time_logs" : "empty");
-      setLoading(false);
-      return;
+                setItems(loadedItems);
+                setSource(loadedItems.length > 0 ? "time_logs" : "empty");
+                setLoading(false);
+                return;
+            }
+
+            if (isAgencyInvoice) {
+                loadedItems = await loadInvoiceItems();
+
+                setItems(loadedItems);
+                setSource(loadedItems.length > 0 ? "invoice_items" : "empty");
+                setLoading(false);
+                return;
+            }
+
+            // Safe fallback for unknown invoice type
+            loadedItems = await loadInvoiceItems();
+
+            if (loadedItems.length === 0) {
+                loadedItems = await loadTimeLogItems();
+            }
+
+            setItems(loadedItems);
+            setSource(loadedItems.length > 0 ? "fallback" : "empty");
+        } catch (error) {
+            console.error("Invoice preview error:", error);
+            setItems([]);
+            setSource("error");
+        }
+
+        setLoading(false);
     }
 
-    if (isAgencyInvoice) {
-      loadedItems = await loadInvoiceItems();
-
-      setItems(loadedItems);
-      setSource(loadedItems.length > 0 ? "invoice_items" : "empty");
-      setLoading(false);
-      return;
-    }
-
-    // Safe fallback for unknown invoice type
-    loadedItems = await loadInvoiceItems();
-
-    if (loadedItems.length === 0) {
-      loadedItems = await loadTimeLogItems();
-    }
-
-    setItems(loadedItems);
-    setSource(loadedItems.length > 0 ? "fallback" : "empty");
-  } catch (error) {
-    console.error("Invoice preview error:", error);
-    setItems([]);
-    setSource("error");
-  }
-
-  setLoading(false);
-}
-
-   async function loadInvoiceItems() {
-  const { data, error } = await supabase
-    .from("invoice_items")
-    .select(
-      `
+    async function loadInvoiceItems() {
+        const { data, error } = await supabase
+            .from("invoice_items")
+            .select(
+                `
       id,
       invoice_id,
       description,
@@ -84,32 +84,32 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
       amount,
       time_log_id
     `
-    )
-    .eq("invoice_id", invoice.id)
-    .order("created_at", { ascending: true });
+            )
+            .eq("invoice_id", invoice.id)
+            .order("created_at", { ascending: true });
 
-  if (error) {
-    console.error("Invoice items error:", error);
-    return [];
-  }
+        if (error) {
+            console.error("Invoice items error:", error);
+            return [];
+        }
 
-  return (data || []).map((item) => {
-    const quantity = Number(item.quantity || 0);
-    const rate = Number(item.rate || 0);
-    const amount =
-      Number(item.amount || 0) || Number((quantity * rate).toFixed(2));
+        return (data || []).map((item) => {
+            const quantity = Number(item.quantity || 0);
+            const rate = Number(item.rate || 0);
+            const amount =
+                Number(item.amount || 0) || Number((quantity * rate).toFixed(2));
 
-    return {
-      id: item.id,
-      type: "invoice_item",
-      description: item.description || "Invoice item",
-      quantity,
-      rate,
-      amount,
-      date: null,
-    };
-  });
-}
+            return {
+                id: item.id,
+                type: "invoice_item",
+                description: item.description || "Invoice item",
+                quantity,
+                rate,
+                amount,
+                date: null,
+            };
+        });
+    }
 
     async function loadTimeLogItems() {
         const { data, error } = await supabase
@@ -186,6 +186,7 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
     function handlePrint() {
         window.print();
     }
+    
 
     if (!open || !invoice) return null;
 
@@ -403,6 +404,8 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
                             </div>
                         </div>
 
+                        <BankDetailsCard invoice={invoice} />
+
                         <div className="mt-10 rounded-2xl bg-slate-50 p-5">
                             <p className="text-sm text-slate-600">
                                 {invoice.notes ||
@@ -430,4 +433,50 @@ function getSourceLabel(source) {
     };
 
     return labels[source] || "Loading...";
+}
+
+function BankDetailsCard({ invoice }) {
+  const hasBankDetails =
+    invoice?.creator_bank_name ||
+    invoice?.creator_bank_account_name ||
+    invoice?.creator_bank_account_number;
+
+  if (!hasBankDetails) return null;
+
+  return (
+    <div className="mt-10 rounded-2xl border border-blue-100 bg-blue-50 p-5">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-blue-700">
+        Payment Instructions
+      </h3>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 text-sm text-blue-950 sm:grid-cols-2">
+        <Detail label="Payee" value={invoice.creator_display_name} />
+        <Detail label="Bank" value={invoice.creator_bank_name} />
+        <Detail label="Account Name" value={invoice.creator_bank_account_name} />
+        <Detail
+          label="Account Number"
+          value={invoice.creator_bank_account_number}
+        />
+        <Detail label="Account Type" value={invoice.creator_bank_account_type} />
+        <Detail label="Branch" value={invoice.creator_bank_branch} />
+        <Detail label="SWIFT / Code" value={invoice.creator_bank_swift_code} />
+      </div>
+
+      {invoice.creator_bank_notes && (
+        <p className="mt-4 whitespace-pre-line rounded-xl bg-white/70 p-3 text-sm text-blue-900">
+          {invoice.creator_bank_notes}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Detail({ label, value }) {
+  if (!value) return null;
+
+  return (
+    <p>
+      <span className="font-semibold">{label}:</span> {value}
+    </p>
+  );
 }

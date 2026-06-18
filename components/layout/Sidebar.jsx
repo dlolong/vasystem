@@ -60,9 +60,7 @@ const menus = {
     ],
     client: [
         { label: "Dashboard", href: "/client", icon: LayoutDashboard },
-        { label: "Projects", href: "/client/projects", icon: FolderKanban },
         { label: "Invoices", href: "/client/invoices", icon: FileText },
-        // { label: "Settings", href: "/client/settings", icon: Settings },
     ],
 };
 

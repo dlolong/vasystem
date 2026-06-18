@@ -16,6 +16,7 @@ import GenerateInvoiceDialog from "@/components/invoices/GenerateInvoiceDialog";
 import InvoicePreviewDialog from "@/components/invoices/InvoicePreviewDialog";
 import InvoiceListItem from "@/components/invoices/InvoiceListItem";
 import { formatMoney } from "@/lib/currency";
+import BankAccountSettings from "@/components/settings/BankAccountSettings";
 
 const PAGE_SIZE = 10;
 
@@ -324,77 +325,83 @@ export default function VaInvoicesPage() {
                     icon={<Clock size={20} />}
                 />
             </div>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-200 px-5 py-4">
+                        <h2 className="text-lg font-semibold text-slate-900">
+                            Invoice List
+                        </h2>
+                        <p className="text-sm text-slate-500">
+                            Each invoice displays using its saved invoice currency.
+                        </p>
+                    </div>
 
-            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 px-5 py-4">
-                    <h2 className="text-lg font-semibold text-slate-900">
-                        Invoice List
-                    </h2>
-                    <p className="text-sm text-slate-500">
-                        Each invoice displays using its saved invoice currency.
-                    </p>
+                    {loading ? (
+                        <div className="p-8 text-center text-sm text-slate-500">
+                            Loading invoices...
+                        </div>
+                    ) : invoices.length === 0 ? (
+                        <div className="p-8 text-center">
+                            <p className="text-sm text-slate-500">No invoices yet.</p>
+
+                            <button
+                                type="button"
+                                onClick={() => setShowGenerateDialog(true)}
+                                className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+                            >
+                                <Wand2 size={18} />
+                                Generate Invoice
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-slate-100">
+                            {invoices.map((invoice) => (
+                                <InvoiceListItem
+                                    key={invoice.id}
+                                    invoice={invoice}
+                                    formatDate={formatDate}
+                                    onView={setSelectedInvoice}
+                                    onStatusChange={updateInvoiceStatus}
+                                />
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row">
+                        <p className="text-sm text-slate-500">
+                            Page {page} of {totalPages} · {totalInvoices} invoice
+                            {totalInvoices === 1 ? "" : "s"}
+                        </p>
+
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                disabled={page <= 1}
+                                onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
+                                className="inline-flex items-center gap-1 rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <ChevronLeft size={16} />
+                                Prev
+                            </button>
+
+                            <button
+                                type="button"
+                                disabled={page >= totalPages}
+                                onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
+                                className="inline-flex items-center gap-1 rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Next
+                                <ChevronRight size={16} />
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <div className="xl:sticky xl:top-24 xl:self-start">
+                    <BankAccountSettings mode="va" compact />
                 </div>
+            </div>
 
-                {loading ? (
-                    <div className="p-8 text-center text-sm text-slate-500">
-                        Loading invoices...
-                    </div>
-                ) : invoices.length === 0 ? (
-                    <div className="p-8 text-center">
-                        <p className="text-sm text-slate-500">No invoices yet.</p>
-
-                        <button
-                            type="button"
-                            onClick={() => setShowGenerateDialog(true)}
-                            className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
-                        >
-                            <Wand2 size={18} />
-                            Generate Invoice
-                        </button>
-                    </div>
-                ) : (
-                    <div className="divide-y divide-slate-100">
-                        {invoices.map((invoice) => (
-                            <InvoiceListItem
-                                key={invoice.id}
-                                invoice={invoice}
-                                formatDate={formatDate}
-                                onView={setSelectedInvoice}
-                                onStatusChange={updateInvoiceStatus}
-                            />
-                        ))}
-                    </div>
-                )}
-
-                <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row">
-                    <p className="text-sm text-slate-500">
-                        Page {page} of {totalPages} · {totalInvoices} invoice
-                        {totalInvoices === 1 ? "" : "s"}
-                    </p>
-
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            disabled={page <= 1}
-                            onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-                            className="inline-flex items-center gap-1 rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <ChevronLeft size={16} />
-                            Prev
-                        </button>
-
-                        <button
-                            type="button"
-                            disabled={page >= totalPages}
-                            onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-                            className="inline-flex items-center gap-1 rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            Next
-                            <ChevronRight size={16} />
-                        </button>
-                    </div>
-                </div>
-            </section>
         </main>
     );
 }
