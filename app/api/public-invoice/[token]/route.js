@@ -3,7 +3,8 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function GET(request, { params }) {
   try {
-    const { token } = await params;
+    const resolvedParams = await params;
+    const token = resolvedParams?.token;
 
     if (!token) {
       return NextResponse.json(
@@ -12,20 +13,10 @@ export async function GET(request, { params }) {
       );
     }
 
+    // 1. Load invoice WITHOUT embedding clients.
     const { data: invoice, error: invoiceError } = await supabaseAdmin
       .from("invoices")
-      .select(
-        `
-        *,
-        clients (
-          id,
-          name,
-          email,
-          currency,
-          hourly_rate
-        )
-      `
-      )
+      .select("*")
       .eq("public_token", token)
       .maybeSingle();
 
@@ -43,7 +34,39 @@ export async function GET(request, { params }) {
       );
     }
 
-    const client = invoice.clients || null;
+    // 2. Load client separately to avoid ambiguous relationship error.
+    const clientId = invoice.client_id || invoice.bill_to_client_id || null;
+
+    let client = null;
+
+    if (clientId) {
+      const { data: clientData, error: clientError } = await supabaseAdmin
+        .from("clients")
+        .select(
+          `
+          id,
+          name,
+          email,
+          phone,
+          company_name,
+          billing_address,
+          currency,
+          hourly_rate
+        `
+        )
+        .eq("id", clientId)
+        .maybeSingle();
+
+      if (clientError) {
+        return NextResponse.json(
+          { error: clientError.message },
+          { status: 500 }
+        );
+      }
+
+      client = clientData || null;
+    }
+
     const currency = normalizeCurrency(invoice.currency || client?.currency);
 
     const isVAInvoice = Boolean(invoice.user_id);

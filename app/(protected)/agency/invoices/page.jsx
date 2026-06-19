@@ -33,8 +33,7 @@ const statusOptions = [
 ];
 
 export default function AgencyInvoicesPage() {
-  const { profile } = useAuthUser();
-  const { showToast } = useAppContext();
+  const { showToast, profile, membership, organization } = useAppContext();
 
   const [clients, setClients] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -61,16 +60,22 @@ export default function AgencyInvoicesPage() {
     notes: "",
   });
 
+  const organizationId =
+    organization?.id ||
+    membership?.organization_id ||
+    profile?.organization_id ||
+    null;
+
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(totalInvoices / PAGE_SIZE), 1);
   }, [totalInvoices]);
 
   useEffect(() => {
-    if (profile?.organization_id) {
+    if (organizationId) {
       loadClients();
       loadInvoices();
     }
-  }, [profile, page, search, statusFilter]);
+  }, [organizationId, page, search, statusFilter]);
 
   async function loadClients() {
     if (!profile?.organization_id) return;
@@ -86,41 +91,24 @@ export default function AgencyInvoicesPage() {
   }
 
   async function loadInvoices() {
-    if (!profile?.organization_id) return;
+    if (!organizationId) {
+      setInvoices([]);
+      setTotalInvoices(0);
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
 
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    let query = supabase
+    const { data, error, count } = await supabase
       .from("invoices")
-      .select(
-        `
-        *,
-       clients (
-            id,
-            name,
-            email,
-            currency,
-            hourly_rate
-          )
-      `,
-        { count: "exact" }
-      )
-      .eq("organization_id", profile.organization_id)
+      .select("*", { count: "exact" })
+      .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
       .range(from, to);
-
-    if (search.trim()) {
-      query = query.or(`invoice_number.ilike.%${search.trim()}%`);
-    }
-
-    if (statusFilter !== "all") {
-      query = query.eq("status", statusFilter);
-    }
-
-    const { data, error, count } = await query;
 
     if (error) {
       showToast(error.message, "error");
@@ -130,9 +118,76 @@ export default function AgencyInvoicesPage() {
       return;
     }
 
-    setInvoices(data || []);
+    const invoicesWithClients = await attachClientsToInvoices(data || []);
+
+    setInvoices(invoicesWithClients);
     setTotalInvoices(count || 0);
     setLoading(false);
+  }
+
+  async function attachClientsToInvoices(invoiceRows = []) {
+    const clientIds = [
+      ...new Set(
+        invoiceRows
+          .map((invoice) => invoice.client_id || invoice.bill_to_client_id)
+          .filter(Boolean)
+      ),
+    ];
+
+    if (clientIds.length === 0) {
+      return invoiceRows.map((invoice) => ({
+        ...invoice,
+        client: null,
+        clients: null,
+      }));
+    }
+
+    const { data: clientRows, error } = await supabase
+      .from("clients")
+      .select(
+        `
+      id,
+      name,
+      email,
+      phone,
+      company_name,
+      billing_address,
+      currency,
+      hourly_rate
+    `
+      )
+      .in("id", clientIds);
+
+    if (error) {
+      showToast(error.message, "error");
+
+      return invoiceRows.map((invoice) => ({
+        ...invoice,
+        client: null,
+        clients: null,
+      }));
+    }
+
+    const clientsById = (clientRows || []).reduce((map, client) => {
+      map[client.id] = {
+        ...client,
+        currency: normalizeCurrency(client.currency),
+      };
+
+      return map;
+    }, {});
+
+    return invoiceRows.map((invoice) => {
+      const clientId = invoice.client_id || invoice.bill_to_client_id;
+      const client = clientsById[clientId] || null;
+
+      return {
+        ...invoice,
+        currency: normalizeCurrency(invoice.currency || client?.currency),
+        client,
+        clients: client,
+      };
+    });
   }
 
   function updateForm(e) {
@@ -319,12 +374,12 @@ export default function AgencyInvoicesPage() {
   }, [invoices]);
 
   return (
-    <main className="space-y-6">
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
 
       <GenerateInvoiceDialog
         open={showGenerateDialog}
         mode="agency"
-        organizationId={profile?.organization_id}
+        organizationId={organizationId}
         clients={clients}
         onClose={() => setShowGenerateDialog(false)}
         onGenerated={(invoice) => {

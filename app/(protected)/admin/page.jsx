@@ -89,10 +89,10 @@ export default function AdminPage() {
         } = await supabase.auth.getSession()
 
         if (!session?.access_token) {
-            showToast({
-                type: 'error',
-                message: 'Your session expired. Please login again.',
-            })
+            // showToast({
+            //     type: 'error',
+            //     message: 'Your session expired. Please login again.',
+            // })
             return
         }
 
@@ -160,10 +160,10 @@ export default function AdminPage() {
         if (sessionError || !session?.access_token) {
             setCreatingUser(false)
 
-            showToast({
-                type: 'error',
-                message: 'Your session expired. Please login again.',
-            })
+            // showToast({
+            //     type: 'error',
+            //     message: 'Your session expired. Please login again.',
+            // })
 
             return
         }
@@ -216,10 +216,10 @@ export default function AdminPage() {
         } = await supabase.auth.getSession()
 
         if (!session?.access_token) {
-            showToast({
-                type: 'error',
-                message: 'Your session expired. Please login again.',
-            })
+            // showToast({
+            //     type: 'error',
+            //     message: 'Your session expired. Please login again.',
+            // })
             return
         }
 

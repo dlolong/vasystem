@@ -241,7 +241,7 @@ export default function VaTimeTrackerPage() {
   }, [timeLogs, totalLogs]);
 
   return (
-    <main className="space-y-6">
+<main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
       <AddTimeDialog
         open={showTimeDialog}
         onClose={() => setShowTimeDialog(false)}

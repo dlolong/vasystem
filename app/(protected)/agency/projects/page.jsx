@@ -218,7 +218,7 @@ export default function AgencyProjectsPage() {
   }
 
   return (
-    <main className="space-y-6">
+   <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
 
       <AppDialog
         open={showAddDialog}

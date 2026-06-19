@@ -16,6 +16,7 @@ import { useAuthUser } from "@/lib/hooks/useAuthUser";
 import { useAppContext } from "@/context/AppContext";
 
 import AppDialog from "@/components/ui/AppDialog";
+import AddVaByEmailDialog from '@/components/vas/AddVaByEmailDialog';
 
 const PAGE_SIZE = 8;
 
@@ -27,8 +28,7 @@ function isOnline(lastActive) {
 }
 
 export default function VasPage() {
-  const { profile } = useAuthUser();
-  const { showToast } = useAppContext();
+  const { showToast, profile, membership, organization } = useAppContext();
 
   const [vas, setVas] = useState([]);
   const [totalVas, setTotalVas] = useState(0);
@@ -41,10 +41,17 @@ export default function VasPage() {
   const [adding, setAdding] = useState(false);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showAddVaDialog, setShowAddVaDialog] = useState(false);
 
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(totalVas / PAGE_SIZE), 1);
   }, [totalVas]);
+
+  const organizationId =
+    organization?.id ||
+    membership?.organization_id ||
+    profile?.organization_id ||
+    null;
 
   useEffect(() => {
     if (profile?.organization_id) {
@@ -53,75 +60,68 @@ export default function VasPage() {
   }, [profile, page, search]);
 
   async function loadVas() {
-    if (!profile?.organization_id) return;
+    if (!organizationId) return;
 
     setLoading(true);
 
-    const from = (page - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
-
-    let query = supabase
-      .from("users")
-      .select("*", { count: "exact" })
-      .eq("organization_id", profile.organization_id)
-      .eq("role", "va")
-      .order("email", { ascending: true })
-      .range(from, to);
-
-    if (search.trim()) {
-      query = query.ilike("email", `%${search.trim()}%`);
-    }
-
-    const { data, error, count } = await query;
+    const { data, error } = await supabase
+      .from("va_connections")
+      .select(
+        `
+      id,
+      connection_type,
+      organization_id,
+      va_user_id,
+      va_email,
+      status,
+      hourly_rate,
+      currency,
+      created_at
+    `
+      )
+      .eq("connection_type", "agency")
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: false });
 
     if (error) {
       showToast(error.message, "error");
       setVas([]);
-      setTotalVas(0);
       setLoading(false);
       return;
     }
 
-    setVas(data || []);
-    setTotalVas(count || 0);
+    const rows = data || [];
+
+    const vaUserIds = rows.map((item) => item.va_user_id).filter(Boolean);
+
+    let vaUsersById = {};
+
+    if (vaUserIds.length > 0) {
+      const { data: vaUsers, error: vaUsersError } = await supabase
+        .from("users")
+        .select("id, full_name, email, last_active")
+        .in("id", vaUserIds);
+
+      if (vaUsersError) {
+        showToast(vaUsersError.message, "error");
+      }
+
+      vaUsersById = (vaUsers || []).reduce((map, va) => {
+        map[va.id] = va;
+        return map;
+      }, {});
+    }
+
+    setVas(
+      rows.map((connection) => ({
+        ...connection,
+        va: connection.va_user_id
+          ? vaUsersById[connection.va_user_id] || null
+          : null,
+      }))
+    );
+
     setLoading(false);
-  }
-
-  async function addVA(e) {
-    e.preventDefault();
-
-    if (!profile?.organization_id) {
-      showToast("Agency organization not found.", "error");
-      return;
-    }
-
-    if (!email.trim()) {
-      showToast("VA email is required.", "error");
-      return;
-    }
-
-    setAdding(true);
-
-    const { error } = await supabase.from("users").insert({
-      email: email.trim().toLowerCase(),
-      role: "va",
-      organization_id: profile.organization_id,
-    });
-
-    if (error) {
-      showToast(error.message, "error");
-      setAdding(false);
-      return;
-    }
-
-    showToast("VA added successfully.", "success");
-
-    setEmail("");
-    setShowAddDialog(false);
-    setPage(1);
-    setAdding(false);
-
-    await loadVas();
   }
 
   function handleSearch(value) {
@@ -130,47 +130,17 @@ export default function VasPage() {
   }
 
   return (
-    <main className="space-y-6">
-      <AppDialog
-        open={showAddDialog}
-        title="Add Virtual Assistant"
-        description="Add a VA to your agency workspace using their email."
-        onClose={() => setShowAddDialog(false)}
-      >
-        <form onSubmit={addVA} className="space-y-5">
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              VA Email
-            </label>
-
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="va@email.com"
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
-            />
-          </div>
-
-          <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={() => setShowAddDialog(false)}
-              className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              disabled={adding}
-              className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {adding ? "Adding..." : "Add VA"}
-            </button>
-          </div>
-        </form>
-      </AppDialog>
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
+      <AddVaByEmailDialog
+        open={showAddVaDialog}
+        onClose={() => setShowAddVaDialog(false)}
+        mode="agency"
+        organizationId={organizationId}
+        onAdded={() => {
+          setShowAddVaDialog(false);
+          loadVas();
+        }}
+      />
 
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
@@ -185,7 +155,7 @@ export default function VasPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
             type="button"
-            onClick={() => setShowAddDialog(true)}
+            onClick={() => setShowAddVaDialog(true)}
             className="h-content inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
           >
             <Plus size={18} />

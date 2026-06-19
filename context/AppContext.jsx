@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+} from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -22,6 +28,7 @@ export function AppProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [userRecord, setUserRecord] = useState(null);
   const [membership, setMembership] = useState(null);
   const [organization, setOrganization] = useState(null);
 
@@ -42,14 +49,25 @@ export function AppProvider({ children }) {
     }, 3500);
   }
 
+  function clearWorkspaceState() {
+    setVas([]);
+    setClients([]);
+    setProjects([]);
+    setInvoices([]);
+    setTasks([]);
+  }
+
   async function signOutUser(message = "Session expired. Please login again.") {
     await supabase.auth.signOut();
+
     setSession(null);
     setUser(null);
     setProfile(null);
+    setUserRecord(null);
     setMembership(null);
     setOrganization(null);
-    showToast(message, "error");
+    clearWorkspaceState();
+
     router.push("/login");
   }
 
@@ -72,122 +90,212 @@ export function AppProvider({ children }) {
       return;
     }
 
+    const authUser = currentSession.user;
+    const userId = authUser.id;
+    const userEmail = authUser.email || "";
+
     setSession(currentSession);
-    setUser(currentSession.user);
+    setUser(authUser);
 
-    const userId = currentSession.user.id;
+    const [profileResult, userRowResult, membershipResult] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
 
-    const { data: profileData, error: profileError } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .single();
+      supabase.from("users").select("*").eq("id", userId).maybeSingle(),
 
-    if (profileError) {
-      showToast(profileError.message, "error");
-      setLoading(false);
-      return;
+      supabase
+        .from("memberships")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    if (profileResult.error) {
+      console.warn("Profile load warning:", profileResult.error.message);
     }
 
-    setProfile(profileData);
-
-    const { data: membershipData, error: membershipError } = await supabase
-      .from("memberships")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .limit(1)
-      .single();
-
-    if (membershipError) {
-      showToast("No active workspace found.", "error");
-      setLoading(false);
-      return;
+    if (userRowResult.error) {
+      console.warn("User row load warning:", userRowResult.error.message);
     }
 
-    setMembership(membershipData);
+    if (membershipResult.error) {
+      console.warn("Membership load warning:", membershipResult.error.message);
+    }
 
-    const orgId = membershipData.organization_id;
+    const profileData = profileResult.data || null;
+    const userRowData = userRowResult.data || null;
+    const membershipData = membershipResult.data || null;
 
-    const { data: orgData } = await supabase
-      .from("organizations")
-      .select("*")
-      .eq("id", orgId)
-      .single();
+    const resolvedOrgId =
+      membershipData?.organization_id ||
+      profileData?.organization_id ||
+      userRowData?.organization_id ||
+      null;
 
-    setOrganization(orgData);
+    const resolvedRole =
+      membershipData?.role ||
+      profileData?.role ||
+      userRowData?.role ||
+      authUser.user_metadata?.role ||
+      "va";
 
-    await loadWorkspaceData(orgId, membershipData.role, userId);
+    const combinedProfile = {
+      ...(userRowData || {}),
+      ...(profileData || {}),
+      id: userId,
+      email: profileData?.email || userRowData?.email || userEmail,
+      organization_id: resolvedOrgId,
+      role: resolvedRole,
+    };
+
+    setProfile(combinedProfile);
+    setUserRecord(userRowData || null);
+
+    /*
+      Important:
+      Independent VA can have no membership and no organization.
+      So membership is optional now.
+    */
+    const resolvedMembership =
+      membershipData ||
+      (resolvedOrgId
+        ? {
+            user_id: userId,
+            organization_id: resolvedOrgId,
+            role: resolvedRole,
+            status: "active",
+            fallback: true,
+          }
+        : null);
+
+    setMembership(resolvedMembership);
+
+    if (resolvedOrgId) {
+      const { data: orgData, error: orgError } = await supabase
+        .from("organizations")
+        .select("*")
+        .eq("id", resolvedOrgId)
+        .maybeSingle();
+
+      if (orgError) {
+        console.warn("Organization load warning:", orgError.message);
+      }
+
+      setOrganization(orgData || null);
+    } else {
+      setOrganization(null);
+    }
+
+    await loadWorkspaceData({
+      orgId: resolvedOrgId,
+      role: resolvedRole,
+      userId,
+      userEmail,
+    });
 
     setLoading(false);
   }, []);
 
-  async function loadWorkspaceData(orgId, role, userId) {
-    if (!orgId) return;
+async function loadWorkspaceData({
+  orgId = null,
+  role = "va",
+  userId,
+  userEmail = "",
+}) {
+  if (!userId) return;
 
-    const [
-      vasResult,
-      clientsResult,
-      projectsResult,
-      invoicesResult,
-      tasksResult,
-    ] = await Promise.all([
-      supabase
+  const isVA = role === "va";
+  const isClient = role === "client";
+
+  const vasQuery = orgId
+    ? supabase
         .from("users")
         .select("*")
         .eq("organization_id", orgId)
-        .eq("role", "va"),
+        .eq("role", "va")
+    : Promise.resolve(emptyResult());
 
-      supabase
-        .from("clients")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("created_at", { ascending: false }),
+  let clientsQuery = supabase
+    .from("clients")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-      supabase
+  if (isVA) {
+    clientsQuery = orgId
+      ? clientsQuery.or(`user_id.eq.${userId},organization_id.eq.${orgId}`)
+      : clientsQuery.eq("user_id", userId);
+  } else if (isClient) {
+    clientsQuery = userEmail
+      ? clientsQuery.or(`user_id.eq.${userId},email.eq.${userEmail}`)
+      : clientsQuery.eq("user_id", userId);
+  } else if (orgId) {
+    clientsQuery = clientsQuery.eq("organization_id", orgId);
+  }
+
+  const projectsQuery = isVA
+    ? Promise.resolve(emptyResult())
+    : orgId
+    ? supabase
         .from("projects")
         .select("*")
         .eq("organization_id", orgId)
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+    : Promise.resolve(emptyResult());
 
-      supabase
-        .from("invoices")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("created_at", { ascending: false }),
+  let invoicesQuery = supabase
+    .from("invoices")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-      role === "va"
-        ? supabase
-            .from("tasks")
-            .select("*")
-            .eq("organization_id", orgId)
-            .eq("assigned_to", userId)
-            .order("created_at", { ascending: false })
-        : supabase
-            .from("tasks")
-            .select("*")
-            .eq("organization_id", orgId)
-            .order("created_at", { ascending: false }),
-    ]);
-
-    setVas(vasResult.data || []);
-    setClients(clientsResult.data || []);
-    setProjects(projectsResult.data || []);
-    setInvoices(invoicesResult.data || []);
-    setTasks(tasksResult.data || []);
-
-    const errors = [
-      vasResult.error,
-      clientsResult.error,
-      projectsResult.error,
-      invoicesResult.error,
-      tasksResult.error,
-    ].filter(Boolean);
-
-    if (errors.length > 0) {
-      showToast(errors[0].message, "error");
-    }
+  if (isVA) {
+    invoicesQuery = invoicesQuery.eq("user_id", userId);
+  } else if (isClient) {
+    invoicesQuery = invoicesQuery.eq("created_by", userId);
+  } else if (orgId) {
+    invoicesQuery = invoicesQuery.eq("organization_id", orgId);
   }
+
+  let tasksQuery = supabase
+    .from("tasks")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (isVA) {
+    tasksQuery = tasksQuery.eq("assigned_to", userId);
+  } else if (isClient) {
+    tasksQuery = tasksQuery.eq("created_by", userId);
+  } else if (orgId) {
+    tasksQuery = tasksQuery.eq("organization_id", orgId);
+  }
+
+  const [
+    vasResult,
+    clientsResult,
+    projectsResult,
+    invoicesResult,
+    tasksResult,
+  ] = await Promise.all([
+    vasQuery,
+    clientsQuery,
+    projectsQuery,
+    invoicesQuery,
+    tasksQuery,
+  ]);
+
+  setVas(vasResult.data || []);
+  setClients(clientsResult.data || []);
+  setProjects(isVA ? [] : projectsResult.data || []);
+  setInvoices(invoicesResult.data || []);
+  setTasks(tasksResult.data || []);
+}
+
+function emptyResult() {
+  return {
+    data: [],
+    error: null,
+  };
+}
 
   async function refreshToken() {
     const { data, error } = await supabase.auth.refreshSession();
@@ -204,21 +312,47 @@ export function AppProvider({ children }) {
   }
 
   async function refreshWorkspace() {
-    if (!membership || !user) return;
+    if (!user) return;
 
-    await loadWorkspaceData(
-      membership.organization_id,
-      membership.role,
-      user.id
+    const currentOrgId =
+      membership?.organization_id ||
+      profile?.organization_id ||
+      userRecord?.organization_id ||
+      null;
+
+    const currentRole =
+      membership?.role || profile?.role || userRecord?.role || "va";
+
+    await loadWorkspaceData({
+      orgId: currentOrgId,
+      role: currentRole,
+      userId: user.id,
+      userEmail: user.email || "",
+    });
+  }
+
+  function getCurrentOrgId() {
+    return (
+      membership?.organization_id ||
+      profile?.organization_id ||
+      userRecord?.organization_id ||
+      null
     );
   }
 
+  function getCurrentRole() {
+    return membership?.role || profile?.role || userRecord?.role || "va";
+  }
+
   async function addProject(payload) {
-    if (!membership || !user) return;
+    if (!user) return;
+
+    const orgId = getCurrentOrgId();
 
     const { error } = await supabase.from("projects").insert({
       ...payload,
-      organization_id: membership.organization_id,
+      organization_id: payload.organization_id ?? orgId,
+      user_id: payload.user_id ?? user.id,
       created_by: user.id,
       status: payload.status || "active",
     });
@@ -233,11 +367,18 @@ export function AppProvider({ children }) {
   }
 
   async function addClient(payload) {
-    if (!membership) return;
+    if (!user) return;
+
+    const orgId = getCurrentOrgId();
+    const currentRole = getCurrentRole();
 
     const { error } = await supabase.from("clients").insert({
       ...payload,
-      organization_id: membership.organization_id,
+      organization_id: payload.organization_id ?? orgId,
+      user_id:
+        payload.user_id ??
+        (currentRole === "va" || !orgId ? user.id : null),
+      status: payload.status || "active",
     });
 
     if (error) {
@@ -250,11 +391,17 @@ export function AppProvider({ children }) {
   }
 
   async function addInvoice(payload) {
-    if (!membership || !user) return;
+    if (!user) return;
+
+    const orgId = getCurrentOrgId();
+    const currentRole = getCurrentRole();
 
     const { error } = await supabase.from("invoices").insert({
       ...payload,
-      organization_id: membership.organization_id,
+      organization_id: payload.organization_id ?? orgId,
+      user_id:
+        payload.user_id ??
+        (currentRole === "va" || !orgId ? user.id : null),
       created_by: user.id,
       status: payload.status || "draft",
     });
@@ -269,11 +416,13 @@ export function AppProvider({ children }) {
   }
 
   async function addTask(payload) {
-    if (!membership || !user) return;
+    if (!user) return;
+
+    const orgId = getCurrentOrgId();
 
     const { error } = await supabase.from("tasks").insert({
       ...payload,
-      organization_id: membership.organization_id,
+      organization_id: payload.organization_id ?? orgId,
       created_by: user.id,
       status: payload.status || "todo",
     });
@@ -297,8 +446,10 @@ export function AppProvider({ children }) {
         setSession(null);
         setUser(null);
         setProfile(null);
+        setUserRecord(null);
         setMembership(null);
         setOrganization(null);
+        clearWorkspaceState();
         router.push("/login");
       }
 
@@ -348,12 +499,13 @@ export function AppProvider({ children }) {
     };
   }, []);
 
-  const role = membership?.role;
+  const role = membership?.role || profile?.role || userRecord?.role || "va";
 
   const value = {
     session,
     user,
     profile,
+    userRecord,
     membership,
     organization,
     role,
@@ -380,4 +532,30 @@ export function AppProvider({ children }) {
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+function emptyResult() {
+  return {
+    data: [],
+    error: null,
+  };
+}
+
+function buildProjectsQuery({ orgId = null, role = "va", userId }) {
+  let query = supabase
+    .from("projects")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (role === "client") {
+    return orgId
+      ? query.eq("organization_id", orgId)
+      : query.eq("user_id", userId);
+  }
+
+  if (orgId) {
+    return query.eq("organization_id", orgId);
+  }
+
+  return query.eq("user_id", userId);
 }

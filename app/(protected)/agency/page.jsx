@@ -27,6 +27,7 @@ function isOnline(lastActive) {
 }
 
 function getRelatedClient(row) {
+  if (row?.client) return row.client;
   if (!row?.clients) return null;
 
   return Array.isArray(row.clients) ? row.clients[0] : row.clients;
@@ -34,7 +35,12 @@ function getRelatedClient(row) {
 
 function getInvoiceCurrency(invoice) {
   const client = getRelatedClient(invoice);
-  return client?.currency || DEFAULT_CURRENCY;
+
+  return (
+    invoice?.currency ||
+    client?.currency ||
+    DEFAULT_CURRENCY
+  );
 }
 
 function safeFormatMoney(amount, currency = DEFAULT_CURRENCY) {
@@ -69,8 +75,7 @@ function getInvoiceTotalsByCurrency(invoices, type) {
 }
 
 export default function AgencyDashboardPage() {
-  const { profile } = useAuthUser();
-  const { showToast } = useAppContext();
+  const { showToast, profile } = useAppContext();
 
   const [loading, setLoading] = useState(true);
 
@@ -95,6 +100,71 @@ export default function AgencyDashboardPage() {
       setLoading(false);
     }
   }, [profile]);
+
+  async function attachClientsToInvoices(invoiceRows = []) {
+  const clientIds = [
+    ...new Set(
+      invoiceRows
+        .map((invoice) => invoice.client_id || invoice.bill_to_client_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  if (clientIds.length === 0) {
+    return invoiceRows.map((invoice) => ({
+      ...invoice,
+      client: null,
+      clients: null,
+    }));
+  }
+
+  const { data: clientRows, error } = await supabase
+    .from("clients")
+    .select(
+      `
+      id,
+      name,
+      email,
+      phone,
+      company_name,
+      billing_address,
+      currency,
+      hourly_rate
+    `
+    )
+    .in("id", clientIds);
+
+  if (error) {
+    showToast(error.message, "error");
+
+    return invoiceRows.map((invoice) => ({
+      ...invoice,
+      client: null,
+      clients: null,
+    }));
+  }
+
+  const clientsById = (clientRows || []).reduce((map, client) => {
+    map[client.id] = {
+      ...client,
+      currency: client.currency || DEFAULT_CURRENCY,
+    };
+
+    return map;
+  }, {});
+
+  return invoiceRows.map((invoice) => {
+    const clientId = invoice.client_id || invoice.bill_to_client_id;
+    const client = clientsById[clientId] || null;
+
+    return {
+      ...invoice,
+      currency: invoice.currency || client?.currency || DEFAULT_CURRENCY,
+      client,
+      clients: client,
+    };
+  });
+}
 
   async function loadDashboard() {
     if (!profile?.organization_id) return;
@@ -139,12 +209,13 @@ export default function AgencyDashboardPage() {
         .from("invoices")
         .select(
           `
-          total_amount,
-          status,
-          clients (
-            currency
-          )
-        `
+    id,
+    total_amount,
+    status,
+    currency,
+    client_id,
+    bill_to_client_id
+  `
         )
         .eq("organization_id", orgId),
 
@@ -158,7 +229,7 @@ export default function AgencyDashboardPage() {
 
       supabase
         .from("clients")
-        .select("id, name, email, currency, hourly_rate, created_at")
+        .select("*")
         .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
         .limit(5),
@@ -188,21 +259,17 @@ export default function AgencyDashboardPage() {
         .from("invoices")
         .select(
           `
-          id,
-          invoice_number,
-          total_amount,
-          status,
-          due_date,
-          public_token,
-          created_at,
-          clients (
-            id,
-            name,
-            email,
-            currency,
-            hourly_rate
-          )
-        `
+    id,
+    invoice_number,
+    total_amount,
+    status,
+    due_date,
+    public_token,
+    created_at,
+    currency,
+    client_id,
+    bill_to_client_id
+  `
         )
         .eq("organization_id", orgId)
         .order("created_at", { ascending: false })
@@ -227,7 +294,13 @@ export default function AgencyDashboardPage() {
       return;
     }
 
-    const invoiceAmounts = invoicesAmountResult.data || [];
+    const invoiceAmounts = await attachClientsToInvoices(
+      invoicesAmountResult.data || []
+    );
+
+    const recentInvoicesWithClients = await attachClientsToInvoices(
+      invoicesResult.data || []
+    );
 
     setStats({
       vas: vasCountResult.count || 0,
@@ -241,8 +314,7 @@ export default function AgencyDashboardPage() {
     setRecentVas(vasResult.data || []);
     setRecentClients(clientsResult.data || []);
     setRecentProjects(projectsResult.data || []);
-    setRecentInvoices(invoicesResult.data || []);
-
+    setRecentInvoices(recentInvoicesWithClients);
     setLoading(false);
   }
 
@@ -299,7 +371,7 @@ export default function AgencyDashboardPage() {
   }
 
   return (
-    <main className="space-y-6">
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
@@ -421,11 +493,10 @@ export default function AgencyDashboardPage() {
                         </div>
 
                         <span
-                          className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-                            online
-                              ? "bg-green-100 text-green-700"
-                              : "bg-slate-100 text-slate-600"
-                          }`}
+                          className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${online
+                            ? "bg-green-100 text-green-700"
+                            : "bg-slate-100 text-slate-600"
+                            }`}
                         >
                           {online ? "Online" : "Offline"}
                         </span>
@@ -615,9 +686,8 @@ function StatCard({ title, value, description, icon, color = "indigo" }) {
         </div>
 
         <div
-          className={`rounded-2xl border p-3 ${
-            colors[color] || colors.indigo
-          }`}
+          className={`rounded-2xl border p-3 ${colors[color] || colors.indigo
+            }`}
         >
           {icon}
         </div>

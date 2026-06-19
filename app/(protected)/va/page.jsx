@@ -572,7 +572,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
       <AddClientDialog
         open={showClientDialog}
         onClose={() => setShowClientDialog(false)}

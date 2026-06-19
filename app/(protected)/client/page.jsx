@@ -12,10 +12,13 @@ import {
   AlertCircle,
   Save,
   Loader2,
+  Users,
+  Plus
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
 import { CURRENCY_OPTIONS, formatMoney } from "@/lib/currency";
+import AddVaByEmailDialog from '@/components/vas/AddVaByEmailDialog';
 
 export default function ClientDashboardPage() {
   const { showToast } = useAppContext();
@@ -30,6 +33,7 @@ export default function ClientDashboardPage() {
   const [selectedCurrency, setSelectedCurrency] = useState("USD");
 
   const [invoices, setInvoices] = useState([]);
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   useEffect(() => {
     loadDashboard();
@@ -95,9 +99,9 @@ export default function ClientDashboardPage() {
 
     const normalizedClient = clientData
       ? {
-          ...clientData,
-          currency: normalizeCurrency(clientData.currency),
-        }
+        ...clientData,
+        currency: normalizeCurrency(clientData.currency),
+      }
       : null;
 
     setClientRecord(normalizedClient);
@@ -199,6 +203,36 @@ export default function ClientDashboardPage() {
     setSavingCurrency(false);
   }
 
+  async function loadClientVas(clientId) {
+    const { data, error } = await supabase
+      .from("va_connections")
+      .select(
+        `
+      id,
+      va_email,
+      va_user_id,
+      status,
+      hourly_rate,
+      currency,
+      users (
+        id,
+        full_name,
+        email
+      )
+    `
+      )
+      .eq("client_id", clientId)
+      .eq("connection_type", "client")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      showToast(error.message, "error");
+      return [];
+    }
+
+    return data || [];
+  }
+
   const summary = useMemo(() => {
     const unpaidInvoices = invoices.filter(
       (invoice) =>
@@ -292,7 +326,17 @@ export default function ClientDashboardPage() {
   }
 
   return (
-  <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
+    <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
+      <AddVaByEmailDialog
+        open={showAddDialog}
+        onClose={() => setShowAddDialog(false)}
+        mode="client"
+        clientId={clientRecord?.id}
+        onAdded={() => {
+          setShowAddDialog(false);
+          loadClientVas();
+        }}
+      />
       <div className="flex shrink-0 flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
@@ -305,6 +349,7 @@ export default function ClientDashboardPage() {
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row">
+
           <Link
             href="/client/invoices"
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
@@ -312,6 +357,23 @@ export default function ClientDashboardPage() {
             <FileText size={18} />
             View Invoices
           </Link>
+
+          <Link
+            href="/client/vas"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Users size={18} />
+            My VAs
+          </Link>
+
+          <button
+  type="button"
+  onClick={() => setShowAddDialog(true)}
+  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+>
+  <Plus size={18} />
+  Add VA by Email
+</button>
         </div>
       </div>
 
@@ -351,7 +413,7 @@ export default function ClientDashboardPage() {
               disabled={
                 savingCurrency ||
                 normalizeCurrency(selectedCurrency) ===
-                  normalizeCurrency(clientRecord.currency)
+                normalizeCurrency(clientRecord.currency)
               }
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >

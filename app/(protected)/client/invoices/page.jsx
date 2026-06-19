@@ -70,6 +70,32 @@ export default function ClientInvoicesPage() {
     };
   }, [invoices]);
 
+  const groupedInvoices = useMemo(() => {
+  const groups = {};
+
+  invoices.forEach((invoice) => {
+    const type = invoice.creator_type || "agency";
+    const name =
+      invoice.creator_display_name ||
+      (type === "va" ? "Virtual Assistant" : "Agency");
+
+    const key = `${type}-${invoice.creator_id || name}`;
+
+    if (!groups[key]) {
+      groups[key] = {
+        key,
+        type,
+        name,
+        invoices: [],
+      };
+    }
+
+    groups[key].invoices.push(invoice);
+  });
+
+  return Object.values(groups);
+}, [invoices]);
+
   useEffect(() => {
     loadClient();
   }, []);
@@ -174,36 +200,32 @@ export default function ClientInvoicesPage() {
 
    let query = supabase
   .from("invoices")
-  .select(
-    `
-    id,
-    invoice_number,
-    total_amount,
-    status,
-    due_date,
-    public_token,
-    payment_link,
-    created_at,
-    client_id,
-    currency,
-    creator_type,
-    creator_id,
-    creator_display_name,
-    creator_bank_name,
-    creator_bank_account_name,
-    creator_bank_account_number,
-    creator_bank_account_type,
-    creator_bank_branch,
-    creator_bank_swift_code,
-    creator_bank_notes,
-    payment_method,
-    payment_reference,
-    payment_notes,
-    paid_at
+ .select(
+  `
+  id,
+  invoice_number,
+  total_amount,
+  status,
+  due_date,
+  public_token,
+  payment_link,
+  created_at,
+  client_id,
+  currency,
+  creator_type,
+  creator_id,
+  creator_display_name,
+  creator_bank_name,
+  creator_bank_account_name,
+  creator_bank_account_number,
+  bill_to_type,
+  bill_to_client_id,
+  bill_to_organization_id,
+  va_connection_id
   `,
-    { count: "exact" }
-  )
-  .eq("client_id", clientRecord.id)
+  { count: "exact" }
+)
+.eq("client_id", clientRecord.id)
   .order("created_at", { ascending: false })
   .range(from, to);
 
@@ -341,7 +363,7 @@ const creatorGroups = useMemo(() => {
 
   if (!loading && !clientRecord) {
     return (
-      <main className="space-y-6">
+      <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
         <div className="rounded-2xl border border-orange-200 bg-orange-50 p-6">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-1 text-orange-600" size={22} />
@@ -464,126 +486,64 @@ const creatorGroups = useMemo(() => {
             />
           ) : (
            <div className="space-y-5 p-5">
-  {creatorGroups.map((group) => (
-    <section
-      key={group.key}
-      className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
-    >
-      <div className="border-b border-slate-200 bg-slate-50 p-5">
-        <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+  {groupedInvoices.map((group) => (
+  <section
+    key={group.key}
+    className="rounded-2xl border border-slate-200 bg-white"
+  >
+    <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {group.type === "va" ? "Virtual Assistant" : "Agency"}
+      </p>
+      <h2 className="mt-1 text-lg font-bold text-slate-900">
+        {group.name}
+      </h2>
+    </div>
+
+    <div className="divide-y divide-slate-100">
+      {group.invoices.map((invoice) => (
+        <div
+          key={invoice.id}
+          className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.2fr_1fr_160px_170px]"
+        >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {group.type === "va" ? "Virtual Assistant" : "Agency"}
-            </p>
-
-            <h2 className="mt-1 text-lg font-bold text-slate-900">
-              {group.name}
-            </h2>
-
+            <h3 className="font-semibold text-slate-900">
+              {invoice.invoice_number || `Invoice ${invoice.id.slice(0, 8)}`}
+            </h3>
             <p className="mt-1 text-sm text-slate-500">
-              {group.invoices.length} invoice
-              {group.invoices.length === 1 ? "" : "s"} created
+              Due: {formatDate(invoice.due_date)}
             </p>
           </div>
 
-          <BankMiniDetails bank={group.bank} />
+          <div>
+            <p className="text-sm text-slate-500">Amount</p>
+            <p className="font-semibold text-slate-900">
+              {formatMoney(invoice.total_amount, clientRecord.currency)}
+            </p>
+          </div>
+
+          <div>
+            <span className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusBadge(invoice.status)}`}>
+              {invoice.status || "draft"}
+            </span>
+          </div>
+
+          <div className="flex items-start lg:justify-end">
+            {invoice.public_token && (
+              <a
+                href={`/public-invoice/${invoice.public_token}`}
+                target="_blank"
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                View Invoice
+              </a>
+            )}
+          </div>
         </div>
-      </div>
-
-      <div className="divide-y divide-slate-100">
-        {group.invoices.map((invoice) => {
-          const invoiceCurrency = normalizeCurrency(
-            clientRecord?.currency || invoice.currency
-          );
-
-          return (
-            <div
-              key={invoice.id}
-              className="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-[1.3fr_1fr_150px_230px]"
-            >
-              <div>
-                <h3 className="font-semibold text-slate-900">
-                  {invoice.invoice_number ||
-                    `Invoice ${invoice.id.slice(0, 8)}`}
-                </h3>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Created {formatDate(invoice.created_at)}
-                </p>
-
-                <p className="mt-2 text-xs text-slate-400">
-                  Due: {formatDate(invoice.due_date)}
-                </p>
-
-                {invoice.payment_reference && (
-                  <p className="mt-2 text-xs font-medium text-green-700">
-                    Payment ref: {invoice.payment_reference}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <p className="text-sm text-slate-500">Amount</p>
-                <p className="font-semibold text-slate-900">
-                  {formatMoney(invoice.total_amount, invoiceCurrency)}
-                </p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {invoiceCurrency}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 text-sm text-slate-500">Status</p>
-
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusBadge(
-                    invoice.status
-                  )}`}
-                >
-                  {invoice.status || "draft"}
-                </span>
-              </div>
-
-              <div className="flex flex-col gap-2 lg:items-end">
-                {invoice.public_token && (
-                  <a
-                    href={`/public-invoice/${invoice.public_token}`}
-                    target="_blank"
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    View Invoice
-                    <ExternalLink size={15} />
-                  </a>
-                )}
-
-                {invoice.status !== "paid" &&
-                  invoice.status !== "cancelled" && (
-                    <button
-                      type="button"
-                      onClick={() => markInvoicePaid(invoice)}
-                      disabled={payingInvoiceId === invoice.id}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {payingInvoiceId === invoice.id ? (
-                        <>
-                          <Loader2 size={15} className="animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 size={15} />
-                          I Paid This
-                        </>
-                      )}
-                    </button>
-                  )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  ))}
+      ))}
+    </div>
+  </section>
+))}
 </div>
           )}
         </div>

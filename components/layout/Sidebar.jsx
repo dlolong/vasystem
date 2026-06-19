@@ -61,6 +61,11 @@ const menus = {
     client: [
         { label: "Dashboard", href: "/client", icon: LayoutDashboard },
         { label: "Invoices", href: "/client/invoices", icon: FileText },
+        {
+            label: "My VAs",
+            href: "/client/vas",
+            icon: Users,
+        }
     ],
 };
 

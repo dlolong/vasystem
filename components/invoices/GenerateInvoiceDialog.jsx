@@ -425,9 +425,15 @@ export default function GenerateInvoiceDialog({
                 user_id: isVA ? user.id : null,
                 created_by: user.id,
                 organization_id: isAgency
-                    ? organizationId || clientForInvoice.organization_id || null
-                    : clientForInvoice.organization_id || null,
-                client_id: form.client_id,
+                    ? organizationId
+                    : selectedClient?.recipient_type === "agency"
+                        ? selectedClient.recipient_id
+                        : clientForInvoice?.organization_id || null,
+
+                client_id:
+                    selectedClient?.recipient_type === "agency"
+                        ? null
+                        : form.client_id,
                 currency: invoiceCurrency || "USD",
                 invoice_number: generateInvoiceNumber(),
                 public_token: publicToken,
@@ -450,23 +456,48 @@ export default function GenerateInvoiceDialog({
                 creator_bank_swift_code: creatorBankSnapshot.creator_bank_swift_code,
                 creator_bank_notes: creatorBankSnapshot.creator_bank_notes,
                 payment_method: "bank_transfer",
+
+                bill_to_type: isVA
+                    ? selectedClient?.recipient_type || "client"
+                    : "client",
+
+                bill_to_client_id:
+                    isAgency || selectedClient?.recipient_type === "client"
+                        ? form.client_id
+                        : null,
+
+                bill_to_organization_id:
+                    isVA && selectedClient?.recipient_type === "agency"
+                        ? selectedClient.recipient_id
+                        : null,
+
+                va_connection_id: selectedClient?.va_connection_id || null,
             };
 
             const { data: invoice, error: invoiceError } = await supabase
                 .from("invoices")
-                .insert(invoicePayload)
-                .select(
-                    `
-          *,
-          clients (
-            id,
-            name,
-            email,
-            currency,
-            hourly_rate
-          )
-        `
-                )
+                .insert({
+                    user_id: isVA ? user.id : null,
+                    created_by: user.id,
+                    organization_id: isAgency
+                        ? organizationId
+                        : selectedClient?.organization_id || null,
+                    client_id: form.client_id,
+                    bill_to_type: "client",
+                    bill_to_client_id: form.client_id,
+                    currency: selectedClient?.currency || "USD",
+                    invoice_number: generateInvoiceNumber(),
+                    public_token: publicToken,
+                    payment_link: publicLink,
+                    period_start: form.start_date || null,
+                    period_end: form.end_date || null,
+                    due_date: form.due_date || null,
+                    total_amount: total,
+                    tax,
+                    status: form.status,
+                    notes: form.notes || null,
+                })
+                .select("*")
                 .single();
 
             if (invoiceError) throw invoiceError;
@@ -516,13 +547,13 @@ export default function GenerateInvoiceDialog({
 
             const generatedInvoice = {
                 ...invoice,
-                currency: invoice.currency || invoiceCurrency,
-                client: invoice.clients || clientForInvoice,
+                client: clientForInvoice,
+                clients: clientForInvoice,
+                currency: invoice.currency || clientForInvoice?.currency || "USD",
                 subtotal,
                 tax,
                 total,
-                item_source: isVA ? "time_logs" : "invoice_items",
-            };
+                };
 
             resetForm();
 

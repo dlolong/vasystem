@@ -261,7 +261,7 @@ export default function VaTasksPage() {
   }
 
   return (
-    <main className="space-y-6">
+ <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
       {showTaskDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl">
