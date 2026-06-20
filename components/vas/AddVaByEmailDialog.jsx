@@ -48,6 +48,149 @@ export default function AddVaByEmailDialog({
     }));
   }
 
+  async function addConnection({
+    sourceType,
+    targetType,
+    targetEmail,
+    sourceOrganizationId = null,
+    sourceClientId = null,
+    hourlyRate = 0,
+    currency = "USD",
+  }) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      throw new Error("User session not found.");
+    }
+
+    const response = await fetch("/api/connections/add", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        source_type: sourceType,
+        target_type: targetType,
+        target_email: targetEmail,
+        source_organization_id: sourceOrganizationId,
+        source_client_id: sourceClientId,
+        hourly_rate: Number(hourlyRate || 0),
+        currency: currency || "USD",
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Unable to add VA.");
+    }
+
+    return result.connection;
+  }
+
+  async function checkVaEmailExists(vaEmail) {
+    const cleanEmail = vaEmail?.trim()?.toLowerCase();
+
+    if (!cleanEmail) {
+      return {
+        exists: false,
+        message: "",
+      };
+    }
+
+    /*
+      Check new app_connections table.
+      This catches active and pending VAs added using the new system.
+    */
+    let connectionQuery = supabase
+      .from("app_connections")
+      .select("id, target_email, status, source_type, target_type")
+      .eq("target_type", "va")
+      .ilike("target_email", cleanEmail)
+      .in("status", ["active", "pending"])
+      .limit(1);
+
+    if (isAgency && organizationId) {
+      connectionQuery = connectionQuery
+        .eq("source_type", "agency")
+        .eq("source_organization_id", organizationId);
+    }
+
+    if (isClient && clientId) {
+      connectionQuery = connectionQuery
+        .eq("source_type", "client")
+        .eq("source_client_id", clientId);
+    }
+
+    const { data: existingConnections, error: connectionError } =
+      await connectionQuery;
+
+    if (connectionError) {
+      throw connectionError;
+    }
+
+    if (existingConnections?.length > 0) {
+      const existingConnection = existingConnections[0];
+
+      return {
+        exists: true,
+        message:
+          existingConnection.status === "pending"
+            ? `${cleanEmail} already has a pending invitation.`
+            : `${cleanEmail} is already connected.`,
+      };
+    }
+
+    /*
+      Check old va_connections table.
+      This catches legacy VAs added before app_connections.
+    */
+    let legacyQuery = supabase
+      .from("va_connections")
+      .select("id, va_email, status, connection_type")
+      .ilike("va_email", cleanEmail)
+      .in("status", ["active", "pending"])
+      .limit(1);
+
+    if (isAgency && organizationId) {
+      legacyQuery = legacyQuery
+        .eq("connection_type", "agency")
+        .eq("organization_id", organizationId);
+    }
+
+    if (isClient && clientId) {
+      legacyQuery = legacyQuery
+        .eq("connection_type", "client")
+        .eq("client_id", clientId);
+    }
+
+    const { data: existingLegacy, error: legacyError } = await legacyQuery;
+
+    if (legacyError) {
+      throw legacyError;
+    }
+
+    if (existingLegacy?.length > 0) {
+      const existingConnection = existingLegacy[0];
+
+      return {
+        exists: true,
+        message:
+          existingConnection.status === "pending"
+            ? `${cleanEmail} already has a pending invitation.`
+            : `${cleanEmail} is already connected.`,
+      };
+    }
+
+    return {
+      exists: false,
+      message: "",
+    };
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
 
@@ -70,40 +213,54 @@ export default function AddVaByEmailDialog({
 
     setSaving(true);
 
-    const { data, error } = await supabase.rpc("add_va_connection", {
-      p_va_email: vaEmail,
-      p_connection_type: isAgency ? "agency" : "client",
-      p_organization_id: isAgency ? organizationId : null,
-      p_client_id: isClient ? clientId : null,
-      p_hourly_rate: Number(form.hourly_rate || 0),
-      p_currency: form.currency || "USD",
-    });
+    try {
+      const emailCheck = await checkVaEmailExists(vaEmail);
+
+      if (emailCheck.exists) {
+        showToast(emailCheck.message, "error");
+        setSaving(false);
+        return;
+      }
+
+      const connection = await addConnection({
+        sourceType: isAgency ? "agency" : "client",
+        targetType: "va",
+        targetEmail: vaEmail,
+        sourceOrganizationId: isAgency ? organizationId : null,
+        sourceClientId: isClient ? clientId : null,
+        hourlyRate: Number(form.hourly_rate || 0),
+        currency: form.currency || "USD",
+      });
+
+      showToast(
+        connection?.status === "pending"
+          ? "VA invited. They will become active after signup."
+          : "VA connected successfully.",
+        "success"
+      );
+
+      setForm({
+        va_email: "",
+        hourly_rate: "",
+        currency: "USD",
+      });
+
+      onClose();
+
+      if (onAdded) {
+        onAdded(connection);
+      }
+    } catch (error) {
+      if (error.code === "23505") {
+        showToast("This VA email is already connected.", "error");
+        setSaving(false);
+        return;
+      }
+
+      showToast(error.message || "Unable to add VA.", "error");
+    }
 
     setSaving(false);
-
-    if (error) {
-      showToast(error.message, "error");
-      return;
-    }
-
-    showToast(
-      data?.status === "pending"
-        ? "VA invited. They will become active after signup."
-        : "VA connected successfully.",
-      "success"
-    );
-
-    setForm({
-      va_email: "",
-      hourly_rate: "",
-      currency: "USD",
-    });
-
-    onClose();
-
-    if (onAdded) {
-      onAdded(data);
-    }
   }
 
   return (
@@ -113,7 +270,7 @@ export default function AddVaByEmailDialog({
       description={
         isAgency
           ? "Connect a VA to your agency using their email."
-          : "Connect a VA to your client account using their email."
+          : "Connect a VA or agency provider to your client account using their email."
       }
       onClose={onClose}
     >
@@ -134,7 +291,8 @@ export default function AddVaByEmailDialog({
           />
 
           <p className="mt-2 text-xs text-slate-500">
-            If the VA is not registered yet, they will appear as pending.
+            If the VA is not registered yet, an invitation email will be sent
+            and they will appear as pending.
           </p>
         </div>
 

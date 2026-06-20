@@ -551,7 +551,7 @@ export default function Topbar() {
                     </button>
 
                     {userMenuOpen && (
-                        <div className="absolute right-0 top-12 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                        <div className="z-1 absolute right-0 top-12 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
                             <div className="border-b border-slate-100 px-4 py-4">
                                 <div className="flex items-center gap-3">
                                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-600 text-sm font-bold uppercase text-white">

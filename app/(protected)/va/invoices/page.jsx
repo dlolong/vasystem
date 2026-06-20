@@ -96,16 +96,16 @@ export default function VaInvoicesPage() {
 
         setOrganizationId(orgId);
 
-       await loadInvoiceRecipients(authUser.id, authUser.email, orgId);
+        await loadInvoiceRecipients(authUser.id, authUser.email, orgId);
 
         setLoading(false);
     }
 
-   async function loadInvoiceRecipients(userId, email, orgId = null) {
-  const ownedClientsQuery = supabase
-    .from("clients")
-    .select(
-      `
+    async function loadInvoiceRecipients(userId, email, orgId = null) {
+        const ownedClientsQuery = supabase
+            .from("clients")
+            .select(
+                `
       id,
       name,
       email,
@@ -115,14 +115,14 @@ export default function VaInvoicesPage() {
       user_id,
       status
     `
-    )
-    .eq("user_id", userId)
-    .eq("status", "active");
+            )
+            .eq("user_id", userId)
+            .eq("status", "active");
 
-  const connectionsQuery = supabase
-    .from("va_connections")
-    .select(
-      `
+        const connectionsQuery = supabase
+            .from("va_connections")
+            .select(
+                `
       id,
       connection_type,
       organization_id,
@@ -142,124 +142,124 @@ export default function VaInvoicesPage() {
         hourly_rate
       )
     `
-    )
-    .or(`va_user_id.eq.${userId},va_email.eq.${email}`)
-    .eq("status", "active");
+            )
+            .or(`va_user_id.eq.${userId},va_email.eq.${email}`)
+            .eq("status", "active");
 
-  const [ownedClientsResult, connectionsResult] = await Promise.all([
-    ownedClientsQuery,
-    connectionsQuery,
-  ]);
+        const [ownedClientsResult, connectionsResult] = await Promise.all([
+            ownedClientsQuery,
+            connectionsQuery,
+        ]);
 
-  if (ownedClientsResult.error) {
-    showToast(ownedClientsResult.error.message, "error");
-  }
+        if (ownedClientsResult.error) {
+            showToast(ownedClientsResult.error.message, "error");
+        }
 
-  if (connectionsResult.error) {
-    showToast(connectionsResult.error.message, "error");
-  }
+        if (connectionsResult.error) {
+            showToast(connectionsResult.error.message, "error");
+        }
 
-  const ownedClientRecipients = (ownedClientsResult.data || []).map(
-    (client) => ({
-      ...client,
-      recipient_type: "client",
-      recipient_id: client.id,
-      va_connection_id: null,
-      name: client.name,
-      currency: normalizeCurrency(client.currency),
-      hourly_rate: Number(client.hourly_rate || 0),
-    })
-  );
+        const ownedClientRecipients = (ownedClientsResult.data || []).map(
+            (client) => ({
+                ...client,
+                recipient_type: "client",
+                recipient_id: client.id,
+                va_connection_id: null,
+                name: client.name,
+                currency: normalizeCurrency(client.currency),
+                hourly_rate: Number(client.hourly_rate || 0),
+            })
+        );
 
-  const connectedRecipients = (connectionsResult.data || []).map(
-    (connection) => {
-      if (connection.connection_type === "agency") {
-        return {
-          id: connection.organization_id,
-          recipient_type: "agency",
-          recipient_id: connection.organization_id,
-          va_connection_id: connection.id,
-          name: connection.organizations?.name || "Agency",
-          email: null,
-          currency: normalizeCurrency(connection.currency),
-          hourly_rate: Number(connection.hourly_rate || 0),
-          organization_id: connection.organization_id,
-        };
-      }
+        const connectedRecipients = (connectionsResult.data || []).map(
+            (connection) => {
+                if (connection.connection_type === "agency") {
+                    return {
+                        id: connection.organization_id,
+                        recipient_type: "agency",
+                        recipient_id: connection.organization_id,
+                        va_connection_id: connection.id,
+                        name: connection.organizations?.name || "Agency",
+                        email: null,
+                        currency: normalizeCurrency(connection.currency),
+                        hourly_rate: Number(connection.hourly_rate || 0),
+                        organization_id: connection.organization_id,
+                    };
+                }
 
-      return {
-        id: connection.client_id,
-        recipient_type: "client",
-        recipient_id: connection.client_id,
-        va_connection_id: connection.id,
-        name: connection.clients?.name || "Client",
-        email: connection.clients?.email || null,
-        currency: normalizeCurrency(
-          connection.currency || connection.clients?.currency
-        ),
-        hourly_rate: Number(
-          connection.hourly_rate || connection.clients?.hourly_rate || 0
-        ),
-        organization_id: connection.clients?.organization_id || null,
-      };
+                return {
+                    id: connection.client_id,
+                    recipient_type: "client",
+                    recipient_id: connection.client_id,
+                    va_connection_id: connection.id,
+                    name: connection.clients?.name || "Client",
+                    email: connection.clients?.email || null,
+                    currency: normalizeCurrency(
+                        connection.currency || connection.clients?.currency
+                    ),
+                    hourly_rate: Number(
+                        connection.hourly_rate || connection.clients?.hourly_rate || 0
+                    ),
+                    organization_id: connection.clients?.organization_id || null,
+                };
+            }
+        );
+
+        setRecipients([...ownedClientRecipients, ...connectedRecipients]);
     }
-  );
 
-  setRecipients([...ownedClientRecipients, ...connectedRecipients]);
-}
+    async function loadInvoices() {
+        if (!user) return;
 
-async function loadInvoices() {
-  if (!user) return;
+        setLoading(true);
 
-  setLoading(true);
+        const from = (page - 1) * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
 
-  const from = (page - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
+        const { data, error, count } = await supabase
+            .from("invoices")
+            .select("*", { count: "exact" })
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .range(from, to);
 
-  const { data, error, count } = await supabase
-    .from("invoices")
-    .select("*", { count: "exact" })
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .range(from, to);
+        if (error) {
+            showToast(error.message, "error");
+            setInvoices([]);
+            setTotalInvoices(0);
+            setLoading(false);
+            return;
+        }
 
-  if (error) {
-    showToast(error.message, "error");
-    setInvoices([]);
-    setTotalInvoices(0);
-    setLoading(false);
-    return;
-  }
+        const invoicesWithClients = await attachClientsToInvoices(data || []);
 
-  const invoicesWithClients = await attachClientsToInvoices(data || []);
+        setInvoices(invoicesWithClients);
+        setTotalInvoices(count || 0);
+        setLoading(false);
+    }
 
-  setInvoices(invoicesWithClients);
-  setTotalInvoices(count || 0);
-  setLoading(false);
-}
+    async function attachClientsToInvoices(invoiceRows = []) {
+        const clientIds = [
+            ...new Set(
+                invoiceRows
+                    .map((invoice) => invoice.client_id || invoice.bill_to_client_id)
+                    .filter(Boolean)
+            ),
+        ];
 
-async function attachClientsToInvoices(invoiceRows = []) {
-  const clientIds = [
-    ...new Set(
-      invoiceRows
-        .map((invoice) => invoice.client_id || invoice.bill_to_client_id)
-        .filter(Boolean)
-    ),
-  ];
+        if (clientIds.length === 0) {
+            return invoiceRows.map((invoice) => ({
+                ...invoice,
+                client: null,
+                clients: null,
+                currency: normalizeCurrency(invoice.currency),
+            }));
+        }
 
-  if (clientIds.length === 0) {
-    return invoiceRows.map((invoice) => ({
-      ...invoice,
-      client: null,
-      clients: null,
-      currency: normalizeCurrency(invoice.currency),
-    }));
-  }
-
-  const { data: clientRows, error } = await supabase
-    .from("clients")
-    .select(
-      `
+        const { data: clientRows, error } = await supabase
+            .from("clients")
+            .select(
+                `
       id,
       name,
       email,
@@ -269,41 +269,41 @@ async function attachClientsToInvoices(invoiceRows = []) {
       currency,
       hourly_rate
     `
-    )
-    .in("id", clientIds);
+            )
+            .in("id", clientIds);
 
-  if (error) {
-    showToast(error.message, "error");
+        if (error) {
+            showToast(error.message, "error");
 
-    return invoiceRows.map((invoice) => ({
-      ...invoice,
-      client: null,
-      clients: null,
-      currency: normalizeCurrency(invoice.currency),
-    }));
-  }
+            return invoiceRows.map((invoice) => ({
+                ...invoice,
+                client: null,
+                clients: null,
+                currency: normalizeCurrency(invoice.currency),
+            }));
+        }
 
-  const clientsById = (clientRows || []).reduce((map, client) => {
-    map[client.id] = {
-      ...client,
-      currency: normalizeCurrency(client.currency),
-    };
+        const clientsById = (clientRows || []).reduce((map, client) => {
+            map[client.id] = {
+                ...client,
+                currency: normalizeCurrency(client.currency),
+            };
 
-    return map;
-  }, {});
+            return map;
+        }, {});
 
-  return invoiceRows.map((invoice) => {
-    const clientId = invoice.client_id || invoice.bill_to_client_id;
-    const client = clientsById[clientId] || null;
+        return invoiceRows.map((invoice) => {
+            const clientId = invoice.client_id || invoice.bill_to_client_id;
+            const client = clientsById[clientId] || null;
 
-    return {
-      ...invoice,
-      currency: normalizeCurrency(invoice.currency || client?.currency),
-      client,
-      clients: client,
-    };
-  });
-}
+            return {
+                ...invoice,
+                currency: normalizeCurrency(invoice.currency || client?.currency),
+                client,
+                clients: client,
+            };
+        });
+    }
 
     async function updateInvoiceStatus(invoiceId, status) {
         const {
@@ -376,23 +376,29 @@ async function attachClientsToInvoices(invoiceRows = []) {
     }
 
     return (
-       <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
+        <main className="flex h-[calc(100vh-8rem)] min-h-0 flex-col gap-6">
             <GenerateInvoiceDialog
-  open={showGenerateDialog}
-  mode="va"
-  clients={recipients}
-  onClose={() => setShowGenerateDialog(false)}
-  onGenerated={(invoice) => {
-    setShowGenerateDialog(false);
-    setSelectedInvoice(invoice);
-    loadInvoices();
-  }}
-/>
+                open={showGenerateDialog}
+                mode="va"
+                clients={recipients}
+                onClose={() => setShowGenerateDialog(false)}
+                onGenerated={(invoice) => {
+                    setShowGenerateDialog(false);
+                    setSelectedInvoice(invoice);
+                    loadInvoices();
+                }}
+            />
 
             <InvoicePreviewDialog
                 open={!!selectedInvoice}
                 invoice={selectedInvoice}
                 onClose={() => setSelectedInvoice(null)}
+                onDeleted={(deletedInvoiceId) => {
+                    setInvoices((prev) =>
+                        prev.filter((invoice) => invoice.id !== deletedInvoiceId)
+                    );
+                    setSelectedInvoice(null);
+                }}
             />
 
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">

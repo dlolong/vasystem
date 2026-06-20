@@ -93,6 +93,8 @@ export default function DashboardPage() {
     const currentUser = session.user;
     setUser(currentUser);
 
+    await supabase.rpc("claim_app_connections");
+
     const { data: userRow } = await supabase
       .from("users")
       .select("*")
@@ -111,21 +113,134 @@ export default function DashboardPage() {
 
     setOrganizationId(orgId);
 
-    const loadedClients = await loadClients(currentUser.id, orgId);
+    const loadedClients = await loadClients(currentUser.id);
 
     await Promise.all([
-      loadDashboardData(currentUser.id, orgId),
+      loadDashboardData(currentUser.id, orgId, loadedClients),
       loadActiveTimer(currentUser.id, loadedClients),
     ]);
 
     setLoading(false);
   };
 
-  const loadClients = async (userId, orgId = null) => {
-    let query = supabase
+  const loadClients = async (userId) => {
+    const ownedClientsQuery = supabase
       .from("clients")
       .select(
         `
+      id,
+      name,
+      email,
+      currency,
+      hourly_rate,
+      organization_id,
+      user_id,
+      status
+    `
+      )
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .order("name", { ascending: true });
+
+    const outgoingConnectionsQuery = supabase
+      .from("app_connections")
+      .select(
+        `
+      id,
+      source_type,
+      source_user_id,
+      source_organization_id,
+      source_client_id,
+      target_type,
+      target_actual_type,
+      target_user_id,
+      target_organization_id,
+      target_client_id,
+      target_email,
+      status,
+      hourly_rate,
+      currency,
+      created_at
+    `
+      )
+      .eq("source_type", "va")
+      .eq("source_user_id", userId)
+      .eq("target_type", "client")
+      .in("status", ["active", "pending"])
+      .order("created_at", { ascending: false });
+
+    const incomingConnectionsQuery = supabase
+      .from("app_connections")
+      .select(
+        `
+      id,
+      source_type,
+      source_user_id,
+      source_organization_id,
+      source_client_id,
+      target_type,
+      target_actual_type,
+      target_user_id,
+      target_organization_id,
+      target_client_id,
+      target_email,
+      status,
+      hourly_rate,
+      currency,
+      created_at
+    `
+      )
+      .eq("target_type", "va")
+      .eq("target_user_id", userId)
+      .in("source_type", ["agency", "client"])
+      .in("status", ["active", "pending"])
+      .order("created_at", { ascending: false });
+
+    const [ownedClientsResult, outgoingResult, incomingResult] =
+      await Promise.all([
+        ownedClientsQuery,
+        outgoingConnectionsQuery,
+        incomingConnectionsQuery,
+      ]);
+
+    const errors = [
+      ownedClientsResult.error,
+      outgoingResult.error,
+      incomingResult.error,
+    ].filter(Boolean);
+
+    if (errors.length > 0) {
+      showToast(errors[0].message, "error");
+      setClients([]);
+      return [];
+    }
+
+    const ownedClients = ownedClientsResult.data || [];
+    const outgoingConnections = outgoingResult.data || [];
+    const incomingConnections = incomingResult.data || [];
+
+    const clientIds = [
+      ...ownedClients.map((client) => client.id),
+      ...outgoingConnections.map((connection) => connection.target_client_id),
+      ...incomingConnections.map((connection) => connection.source_client_id),
+    ].filter(Boolean);
+
+    const organizationIds = [
+      ...outgoingConnections.map((connection) => connection.target_organization_id),
+      ...incomingConnections.map((connection) => connection.source_organization_id),
+    ].filter(Boolean);
+
+    const uniqueClientIds = [...new Set(clientIds)];
+    const uniqueOrganizationIds = [...new Set(organizationIds)];
+
+    let clientsById = {};
+    let organizationsById = {};
+
+    if (uniqueClientIds.length > 0) {
+      const { data: clientRows, error } = await supabase
+        .from("clients")
+        .select(
+          `
         id,
         name,
         email,
@@ -135,38 +250,145 @@ export default function DashboardPage() {
         user_id,
         status
       `
-      )
-      .eq("status", "active")
-      .order("name", { ascending: true });
+        )
+        .in("id", uniqueClientIds);
 
-    if (orgId) {
-      query = query.or(`user_id.eq.${userId},organization_id.eq.${orgId}`);
-    } else {
-      query = query.eq("user_id", userId);
+      if (error) {
+        showToast(error.message, "error");
+      }
+
+      clientsById = (clientRows || []).reduce((map, client) => {
+        map[client.id] = client;
+        return map;
+      }, {});
     }
 
-    const { data, error } = await query;
+    if (uniqueOrganizationIds.length > 0) {
+      const { data: organizationRows, error } = await supabase
+        .from("organizations")
+        .select("id, name")
+        .in("id", uniqueOrganizationIds);
 
-    if (error) {
-      setClients([]);
-      return [];
+      if (error) {
+        showToast(error.message, "error");
+      }
+
+      organizationsById = (organizationRows || []).reduce((map, organization) => {
+        map[organization.id] = organization;
+        return map;
+      }, {});
     }
 
-    const activeClients = (data || []).map((client) => ({
-      ...client,
-      currency: normalizeCurrency(client.currency),
-    }));
+    const recipients = [];
 
-    setClients(activeClients);
+    ownedClients.forEach((client) => {
+      recipients.push(createClientRecipientFromClient(client));
+    });
 
-    if (activeClients.length > 0) {
+    outgoingConnections.forEach((connection) => {
+      const isAgency =
+        connection.target_actual_type === "agency" ||
+        Boolean(connection.target_organization_id);
+
+      if (isAgency) {
+        const organization = organizationsById[connection.target_organization_id];
+
+        recipients.push({
+          id: `agency:${connection.target_organization_id || connection.id}`,
+          connection_id: connection.id,
+          source: "app_connection",
+          direction: "outgoing",
+          recipient_kind: "agency_as_client",
+          name: organization?.name || connection.target_email || "Agency",
+          email: connection.target_email,
+          status: connection.status,
+          client_id: null,
+          organization_id: connection.target_organization_id || null,
+          hourly_rate: Number(connection.hourly_rate || 0),
+          currency: normalizeCurrency(connection.currency),
+          can_track: connection.status === "active" && Boolean(connection.target_organization_id),
+        });
+
+        return;
+      }
+
+      const client = clientsById[connection.target_client_id];
+
+      recipients.push({
+        id: `client:${connection.target_client_id || connection.id}`,
+        connection_id: connection.id,
+        source: "app_connection",
+        direction: "outgoing",
+        recipient_kind: "client",
+        name: client?.name || connection.target_email || "Client",
+        email: client?.email || connection.target_email,
+        status: connection.status,
+        client_id: connection.target_client_id || null,
+        organization_id: client?.organization_id || null,
+        hourly_rate: Number(connection.hourly_rate || client?.hourly_rate || 0),
+        currency: normalizeCurrency(connection.currency || client?.currency),
+        can_track: connection.status === "active" && Boolean(connection.target_client_id),
+      });
+    });
+
+    incomingConnections.forEach((connection) => {
+      if (connection.source_type === "agency") {
+        const organization = organizationsById[connection.source_organization_id];
+
+        recipients.push({
+          id: `agency:${connection.source_organization_id || connection.id}`,
+          connection_id: connection.id,
+          source: "app_connection",
+          direction: "incoming",
+          recipient_kind: "agency_as_client",
+          name: organization?.name || "Agency",
+          email: null,
+          status: connection.status,
+          client_id: null,
+          organization_id: connection.source_organization_id || null,
+          hourly_rate: Number(connection.hourly_rate || 0),
+          currency: normalizeCurrency(connection.currency),
+          can_track: connection.status === "active" && Boolean(connection.source_organization_id),
+        });
+
+        return;
+      }
+
+      const client = clientsById[connection.source_client_id];
+
+      recipients.push({
+        id: `client:${connection.source_client_id || connection.id}`,
+        connection_id: connection.id,
+        source: "app_connection",
+        direction: "incoming",
+        recipient_kind: "client",
+        name: client?.name || "Client",
+        email: client?.email || null,
+        status: connection.status,
+        client_id: connection.source_client_id || null,
+        organization_id: client?.organization_id || null,
+        hourly_rate: Number(connection.hourly_rate || client?.hourly_rate || 0),
+        currency: normalizeCurrency(connection.currency || client?.currency),
+        can_track: connection.status === "active" && Boolean(connection.source_client_id),
+      });
+    });
+
+    const uniqueRecipients = dedupeRecipients(recipients);
+
+    setClients(uniqueRecipients);
+
+    const firstTrackableClient = uniqueRecipients.find(
+      (recipient) => recipient.can_track
+    );
+
+    if (firstTrackableClient) {
       setTimerForm((prev) => ({
         ...prev,
-        client_id: prev.client_id || activeClients[0].id,
+        client_id: prev.client_id || firstTrackableClient.id,
       }));
     }
 
-    return activeClients;
+    return uniqueRecipients;
   };
 
   const loadActiveTimer = async (userId, loadedClients = []) => {
@@ -189,12 +411,15 @@ export default function DashboardPage() {
       return;
     }
 
+    const selectedRecipient = findRecipientForTimer(data, loadedClients);
+    const firstTrackableClient = loadedClients.find((item) => item.can_track);
+
     setActiveTimerId(data.id);
     setTimerStatus(data.status);
     setTimerStartDate(new Date(data.started_at));
 
     setTimerForm({
-      client_id: data.client_id || loadedClients?.[0]?.id || "",
+      client_id: selectedRecipient?.id || firstTrackableClient?.id || "",
       description: data.description || "",
     });
 
@@ -222,7 +447,7 @@ export default function DashboardPage() {
     return accumulated + Math.max(runningSeconds, 0);
   };
 
-  const loadDashboardData = async (userId, orgId = null) => {
+  const loadDashboardData = async (userId, orgId = null, loadedClients = clients) => {
     const startOfWeek = getStartOfWeek(new Date());
     const endOfWeek = getEndOfWeek(new Date());
 
@@ -230,58 +455,52 @@ export default function DashboardPage() {
       .from("time_logs")
       .select(
         `
-        *,
-        clients (
-          id,
-          name,
-          email,
-          currency,
-          hourly_rate
-        )
-      `
+      *,
+      clients (
+        id,
+        name,
+        email,
+        currency,
+        hourly_rate
+      )
+    `
       )
       .eq("user_id", userId)
       .gte("start_time", startOfWeek.toISOString())
       .lte("start_time", endOfWeek.toISOString())
       .order("start_time", { ascending: false });
 
-    let clientsQuery = supabase
-      .from("clients")
-      .select("id, currency, status")
-      .eq("status", "active");
-
-    if (orgId) {
-      clientsQuery = clientsQuery.or(`user_id.eq.${userId},organization_id.eq.${orgId}`);
-    } else {
-      clientsQuery = clientsQuery.eq("user_id", userId);
-    }
-
-    const { data: activeClients } = await clientsQuery;
-
     const { data: invoices } = await supabase
       .from("invoices")
       .select(
         `
-        id,
-        total_amount,
-        status,
-        currency,
-        clients (
-          id,
-          currency
-        )
-      `
+      id,
+      total_amount,
+      status,
+      currency,
+      client_id,
+      bill_to_client_id,
+      bill_to_organization_id,
+      organization_id
+    `
       )
       .eq("user_id", userId)
       .neq("status", "paid")
       .neq("status", "cancelled");
 
-    const totalHours = (timeLogs || []).reduce((sum, log) => {
+    const normalizedTimeLogs = attachRecipientToLogs(timeLogs || [], loadedClients);
+
+    const totalHours = normalizedTimeLogs.reduce((sum, log) => {
       return sum + getHours(log.duration);
     }, 0);
 
-    const billableLogs = (timeLogs || []).filter((log) => log.billable !== false);
-    const uninvoicedLogs = billableLogs.filter((log) => log.invoiced !== true);
+    const billableLogs = normalizedTimeLogs.filter(
+      (log) => log.billable !== false
+    );
+
+    const uninvoicedLogs = billableLogs.filter(
+      (log) => log.invoiced !== true
+    );
 
     setStats({
       totalHours: totalHours || 0,
@@ -290,10 +509,10 @@ export default function DashboardPage() {
       uninvoicedTotals: groupTotalsByLogCurrency(uninvoicedLogs),
       unpaidInvoices: invoices?.length || 0,
       uninvoicedLogs: uninvoicedLogs.length,
-      activeClients: activeClients?.length || 0,
+      activeClients: loadedClients.filter((client) => client.status === "active").length,
     });
 
-    setRecentEntries((timeLogs || []).slice(0, 5));
+    setRecentEntries(normalizedTimeLogs.slice(0, 5));
   };
 
   const handleTimerFormChange = (e) => {
@@ -323,17 +542,27 @@ export default function DashboardPage() {
       (client) => client.id === timerForm.client_id
     );
 
+    if (!selectedClient) {
+      setTimerError("Selected client was not found.");
+      return;
+    }
+
+    if (!selectedClient.can_track) {
+      setTimerError("This connection is still pending and cannot be tracked yet.");
+      return;
+    }
+
     const now = new Date();
 
     const { data, error } = await supabase
       .from("active_timers")
       .insert({
         user_id: user.id,
-        organization_id: selectedClient?.organization_id || null,
-        client_id: timerForm.client_id,
+        organization_id: selectedClient.organization_id || null,
+        client_id: selectedClient.client_id || null,
         description: timerForm.description || "",
-        hourly_rate: Number(selectedClient?.hourly_rate || 0),
-        currency: normalizeCurrency(selectedClient?.currency),
+        hourly_rate: Number(selectedClient.hourly_rate || 0),
+        currency: normalizeCurrency(selectedClient.currency),
         status: "running",
         started_at: now.toISOString(),
         last_resumed_at: now.toISOString(),
@@ -452,24 +681,29 @@ export default function DashboardPage() {
       return;
     }
 
-    const selectedClient = clients.find(
-      (client) => client.id === activeTimer.client_id
-    );
+    const selectedClient =
+      findRecipientForTimer(activeTimer, clients) ||
+      clients.find((client) => client.id === timerForm.client_id);
 
     const finalSeconds = calculateElapsedSecondsFromTimer(activeTimer);
     const now = new Date();
 
     const { error: insertError } = await supabase.from("time_logs").insert({
       user_id: user.id,
-      organization_id: activeTimer.organization_id || null,
-      client_id: activeTimer.client_id,
+      organization_id:
+        activeTimer.organization_id || selectedClient?.organization_id || null,
+      client_id: activeTimer.client_id || selectedClient?.client_id || null,
       project_id: activeTimer.project_id || null,
       start_time: new Date(activeTimer.started_at).toISOString(),
       end_time: now.toISOString(),
       duration: finalSeconds,
       description: activeTimer.description || "Timed work session",
-      hourly_rate: Number(activeTimer.hourly_rate || selectedClient?.hourly_rate || 0),
-      currency: normalizeCurrency(activeTimer.currency || selectedClient?.currency),
+      hourly_rate: Number(
+        activeTimer.hourly_rate || selectedClient?.hourly_rate || 0
+      ),
+      currency: normalizeCurrency(
+        activeTimer.currency || selectedClient?.currency
+      ),
       billable: true,
       invoiced: false,
     });
@@ -676,9 +910,18 @@ export default function DashboardPage() {
                     <option value="">No active clients</option>
                   ) : (
                     clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.name} · {normalizeCurrency(client.currency)} ·{" "}
+                      <option
+                        key={client.id}
+                        value={client.id}
+                        disabled={!client.can_track}
+                      >
+                        {client.name} ·{" "}
+                        {client.recipient_kind === "agency_as_client"
+                          ? "Agency as Client"
+                          : "Client"}{" "}
+                        · {normalizeCurrency(client.currency)} ·{" "}
                         {formatMoney(client.hourly_rate || 0, client.currency || "USD")}/hr
+                        {client.status === "pending" ? " · Pending" : ""}
                       </option>
                     ))
                   )}
@@ -706,7 +949,7 @@ export default function DashboardPage() {
               {timerStatus === "idle" && (
                 <button
                   onClick={startTimer}
-                  disabled={clients.length === 0}
+                  disabled={!clients.some((client) => client.can_track)}
                   className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
                 >
                   Start
@@ -902,15 +1145,20 @@ function getLogCurrency(log) {
 function getInvoiceCurrency(invoice) {
   return normalizeCurrency(
     invoice?.currency ||
-      invoice?.clients?.currency ||
-      invoice?.client?.currency ||
-      "USD"
+    invoice?.clients?.currency ||
+    invoice?.client?.currency ||
+    "USD"
   );
 }
 
 function getLogAmount(log) {
   const hours = getHours(log.duration);
-  const rate = Number(log.hourly_rate || log.clients?.hourly_rate || 0);
+  const rate = Number(
+    log.hourly_rate ||
+    log.clients?.hourly_rate ||
+    log.recipient?.hourly_rate ||
+    0
+  );
 
   return hours * rate;
 }
@@ -943,6 +1191,104 @@ function groupTotalsByInvoiceCurrency(invoices = []) {
 
     return totals;
   }, {});
+}
+
+function createClientRecipientFromClient(client) {
+  return {
+    id: `client:${client.id}`,
+    connection_id: null,
+    source: "owned_client",
+    direction: "owned",
+    recipient_kind: "client",
+    name: client.name || client.email || "Client",
+    email: client.email || null,
+    status: client.status || "active",
+    client_id: client.id,
+    organization_id: client.organization_id || null,
+    hourly_rate: Number(client.hourly_rate || 0),
+    currency: normalizeCurrency(client.currency),
+    can_track: true,
+  };
+}
+
+function dedupeRecipients(recipients = []) {
+  const map = new Map();
+
+  recipients.forEach((recipient) => {
+    const key = recipient.client_id
+      ? `client:${recipient.client_id}`
+      : recipient.organization_id
+        ? `agency:${recipient.organization_id}`
+        : `pending:${recipient.email}`;
+
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, {
+        ...recipient,
+        id: key,
+      });
+      return;
+    }
+
+    if (existing.status === "pending" && recipient.status === "active") {
+      map.set(key, {
+        ...recipient,
+        id: key,
+      });
+    }
+  });
+
+  return [...map.values()].sort((a, b) => {
+    if (a.status === "active" && b.status !== "active") return -1;
+    if (a.status !== "active" && b.status === "active") return 1;
+
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function findRecipientForTimer(timer, recipients = []) {
+  return recipients.find((recipient) => {
+    if (timer.client_id && recipient.client_id === timer.client_id) {
+      return true;
+    }
+
+    if (
+      !timer.client_id &&
+      timer.organization_id &&
+      recipient.organization_id === timer.organization_id
+    ) {
+      return true;
+    }
+
+    return false;
+  });
+}
+
+function attachRecipientToLogs(logs = [], recipients = []) {
+  return logs.map((log) => {
+    const recipient = recipients.find((item) => {
+      if (log.client_id && item.client_id === log.client_id) {
+        return true;
+      }
+
+      if (
+        !log.client_id &&
+        log.organization_id &&
+        item.organization_id === log.organization_id
+      ) {
+        return true;
+      }
+
+      return false;
+    });
+
+    return {
+      ...log,
+      recipient: recipient || null,
+      clients: log.clients || recipient || null,
+    };
+  });
 }
 
 function CurrencyTotals({ totals }) {
@@ -1007,18 +1353,16 @@ function BillingHealthPanel({
         <HealthRow
           icon={<ReceiptText size={18} />}
           title="Unpaid invoices"
-          description={`${unpaidInvoices} invoice${
-            unpaidInvoices === 1 ? "" : "s"
-          } waiting for payment`}
+          description={`${unpaidInvoices} invoice${unpaidInvoices === 1 ? "" : "s"
+            } waiting for payment`}
           totals={unpaidTotals}
         />
 
         <HealthRow
           icon={<TimerReset size={18} />}
           title="Ready to invoice"
-          description={`${uninvoicedLogs} uninvoiced billable time log${
-            uninvoicedLogs === 1 ? "" : "s"
-          }`}
+          description={`${uninvoicedLogs} uninvoiced billable time log${uninvoicedLogs === 1 ? "" : "s"
+            }`}
           totals={uninvoicedTotals}
         />
 

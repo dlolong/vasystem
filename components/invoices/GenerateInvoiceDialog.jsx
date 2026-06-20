@@ -11,6 +11,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import AppDialog from "@/components/ui/AppDialog";
 import { formatMoney } from "@/lib/currency";
+import { useAppContext } from "@/context/AppContext";
 
 const DEFAULT_NOTES =
     "Thank you for your business. Please settle this invoice on or before the due date.";
@@ -26,8 +27,8 @@ export default function GenerateInvoiceDialog({
     const isAgency = mode === "agency";
     const isVA = mode === "va";
 
+    const { showToast } = useAppContext();
     const [generating, setGenerating] = useState(false);
-    const [message, setMessage] = useState({ type: "", text: "" });
 
     const [form, setForm] = useState({
         client_id: "",
@@ -85,8 +86,6 @@ export default function GenerateInvoiceDialog({
                 rate: 0,
             },
         ]);
-
-        setMessage({ type: "", text: "" });
     }
 
     function addManualItem() {
@@ -360,12 +359,10 @@ export default function GenerateInvoiceDialog({
     async function handleGenerate(e) {
         e.preventDefault();
 
-        setMessage({ type: "", text: "" });
-
         const validationError = validate();
 
         if (validationError) {
-            setMessage({ type: "error", text: validationError });
+            showToast(validationError, "error");
             return;
         }
 
@@ -553,18 +550,22 @@ export default function GenerateInvoiceDialog({
                 subtotal,
                 tax,
                 total,
-                };
+            };
 
             resetForm();
+
+            showToast(
+                isAgency
+                    ? "Agency invoice created successfully."
+                    : "VA invoice generated successfully.",
+                "success"
+            );
 
             if (onGenerated) {
                 onGenerated(generatedInvoice);
             }
         } catch (error) {
-            setMessage({
-                type: "error",
-                text: error.message || "Unable to generate invoice.",
-            });
+            showToast(error.message || "Unable to generate invoice.", "error");
         }
 
         setGenerating(false);
@@ -582,17 +583,6 @@ export default function GenerateInvoiceDialog({
             onClose={onClose}
         >
             <form onSubmit={handleGenerate} className="space-y-5">
-                {message.text && (
-                    <div
-                        className={`rounded-2xl border px-4 py-3 text-sm ${message.type === "error"
-                            ? "border-red-200 bg-red-50 text-red-700"
-                            : "border-green-200 bg-green-50 text-green-700"
-                            }`}
-                    >
-                        {message.text}
-                    </div>
-                )}
-
                 <div>
                     <label className="mb-2 block text-sm font-semibold text-slate-700">
                         Client

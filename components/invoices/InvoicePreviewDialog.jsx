@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Printer, X } from "lucide-react";
+import { ExternalLink, Loader2, Printer, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { formatMoney } from "@/lib/currency";
+import { useAppContext } from "@/context/AppContext";
 
-export default function InvoicePreviewDialog({ open, invoice, onClose }) {
+export default function InvoicePreviewDialog({
+    open,
+    invoice,
+    onClose,
+    onDeleted,
+}) {
+    const { showToast } = useAppContext();
+
+const [currentUserId, setCurrentUserId] = useState(null);
+const [deleting, setDeleting] = useState(false);
+
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [source, setSource] = useState("");
@@ -18,6 +29,18 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
     const isVAInvoice = Boolean(invoice?.user_id);
     const isAgencyInvoice = !invoice?.user_id && Boolean(invoice?.organization_id);
 
+    const canDeleteInvoice =
+    Boolean(currentUserId) &&
+    Boolean(invoice?.id) &&
+    (
+        invoice?.created_by === currentUserId ||
+        invoice?.user_id === currentUserId ||
+        (
+            invoice?.creator_type === "va" &&
+            invoice?.creator_id === currentUserId
+        )
+    );
+
     useEffect(() => {
         if (open && invoice?.id) {
             loadItems();
@@ -28,6 +51,72 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
             setSource("");
         }
     }, [open, invoice?.id]);
+
+    useEffect(() => {
+    if (open) {
+        loadCurrentUser();
+    }
+
+    if (!open) {
+        setCurrentUserId(null);
+        setDeleting(false);
+    }
+}, [open]);
+
+async function handleDeleteInvoice() {
+    if (!invoice?.id) {
+        showToast("Invoice not found.", "error");
+        return;
+    }
+
+    if (!canDeleteInvoice) {
+        showToast("Only the invoice creator can delete this invoice.", "error");
+        return;
+    }
+
+    const confirmed = window.confirm(
+        `Delete invoice ${invoice.invoice_number || invoice.id.slice(0, 8)}?\n\nThis will permanently delete the invoice. For VA invoices, linked time logs will become uninvoiced again.`
+    );
+
+    if (!confirmed) return;
+
+    setDeleting(true);
+
+    try {
+        const { error } = await supabase.rpc("delete_invoice_as_creator", {
+            p_invoice_id: invoice.id,
+        });
+
+        if (error) throw error;
+
+        showToast("Invoice deleted successfully.", "success");
+
+        if (onDeleted) {
+            onDeleted(invoice.id);
+        }
+
+        onClose();
+    } catch (error) {
+        showToast(error.message || "Unable to delete invoice.", "error");
+    }
+
+    setDeleting(false);
+}
+
+async function loadCurrentUser() {
+    const {
+        data: { user },
+        error,
+    } = await supabase.auth.getUser();
+
+    if (error) {
+        console.error(error);
+        setCurrentUserId(null);
+        return;
+    }
+
+    setCurrentUserId(user?.id || null);
+}
 
     async function loadItems() {
         setLoading(true);
@@ -216,6 +305,27 @@ export default function InvoicePreviewDialog({ open, invoice, onClose }) {
                                 <ExternalLink size={15} />
                             </a>
                         )}
+
+                        {canDeleteInvoice && (
+    <button
+        type="button"
+        onClick={handleDeleteInvoice}
+        disabled={deleting}
+        className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+        {deleting ? (
+            <>
+                <Loader2 size={15} className="animate-spin" />
+                Deleting...
+            </>
+        ) : (
+            <>
+                <Trash2 size={15} />
+                Delete
+            </>
+        )}
+    </button>
+)}
 
                         <button
                             type="button"

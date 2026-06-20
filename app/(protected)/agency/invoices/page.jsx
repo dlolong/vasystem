@@ -720,3 +720,7 @@ function Pagination({ page, totalPages, total, label, onPrev, onNext }) {
     </div>
   );
 }
+
+function normalizeCurrency(currency) {
+  return currency?.trim()?.toUpperCase() || "USD";
+}

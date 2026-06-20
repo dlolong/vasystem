@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Search,
   Plus,
@@ -46,55 +47,162 @@ export default function AgencyClientsPage() {
 
     setLoading(true);
 
+    const orgId = profile.organization_id;
+    const keyword = search.trim().toLowerCase();
+
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    let query = supabase
-      .from("clients")
+    /*
+      Source of truth:
+      Only agency-client app_connections.
+      Do NOT load direct clients.organization_id list.
+    */
+    let connectionsQuery = supabase
+      .from("app_connections")
       .select(
         `
-        id,
-        name,
-        email,
-        hourly_rate,
-        currency,
-        status,
-        organization_id,
-        user_id,
-        created_at
-      `,
+      id,
+      target_client_id,
+      target_email,
+      target_user_id,
+      target_actual_type,
+      hourly_rate,
+      currency,
+      status,
+      created_at
+    `,
         { count: "exact" }
       )
-      .eq("organization_id", profile.organization_id)
-      .order("created_at", { ascending: false })
-      .range(from, to);
+      .eq("source_type", "agency")
+      .eq("source_organization_id", orgId)
+      .eq("target_type", "client")
+      .in("status", ["active", "pending"])
+      .order("created_at", { ascending: false });
 
-    if (search.trim()) {
-      const keyword = search.trim();
+    const { data: connections, error: connectionsError } =
+      await connectionsQuery;
 
-      query = query.or(
-        `name.ilike.%${keyword}%,email.ilike.%${keyword}%,company_name.ilike.%${keyword}%`
-      );
-    }
-
-    const { data, error, count } = await query;
-
-    if (error) {
-      showToast(error.message, "error");
+    if (connectionsError) {
+      showToast(connectionsError.message, "error");
       setClients([]);
       setTotalClients(0);
       setLoading(false);
       return;
     }
 
-    setClients(
-      (data || []).map((client) => ({
-        ...client,
-        currency: normalizeCurrency(client.currency),
-      }))
-    );
+    const connectionRows = connections || [];
 
-    setTotalClients(count || 0);
+    const connectionClientIds = connectionRows
+      .map((connection) => connection.target_client_id)
+      .filter(Boolean);
+
+    let connectedClientsById = {};
+
+    if (connectionClientIds.length > 0) {
+      const { data: connectedClients, error: connectedClientsError } =
+        await supabase
+          .from("clients")
+          .select(
+            `
+          id,
+          name,
+          email,
+          phone,
+          company_name,
+          hourly_rate,
+          currency,
+          status,
+          organization_id,
+          user_id,
+          created_at
+        `
+          )
+          .in("id", [...new Set(connectionClientIds)]);
+
+      if (connectedClientsError) {
+        showToast(connectedClientsError.message, "error");
+        setClients([]);
+        setTotalClients(0);
+        setLoading(false);
+        return;
+      }
+
+      connectedClientsById = (connectedClients || []).reduce((map, client) => {
+        map[client.id] = client;
+        return map;
+      }, {});
+    }
+
+    let mappedClients = connectionRows.map((connection) => {
+      const connectedClient = connectedClientsById[connection.target_client_id];
+
+      if (connectedClient) {
+        return {
+          ...connectedClient,
+          row_type: "app_connection",
+          app_connection_id: connection.id,
+          route_id: connectedClient.id,
+          hourly_rate: Number(
+            connection.hourly_rate || connectedClient.hourly_rate || 0
+          ),
+          currency: normalizeCurrency(
+            connection.currency || connectedClient.currency
+          ),
+          status: connection.status || "active",
+          can_open: true,
+        };
+      }
+
+      /*
+        Pending invited client:
+        There is an app_connections row, but no clients row yet.
+      */
+      return {
+        id: connection.id,
+        row_type: "pending_connection",
+        app_connection_id: connection.id,
+        route_id: connection.id,
+        name: connection.target_email || "Pending Client",
+        email: connection.target_email || "",
+        phone: null,
+        company_name: null,
+        hourly_rate: Number(connection.hourly_rate || 0),
+        currency: normalizeCurrency(connection.currency),
+        status: connection.status || "pending",
+        organization_id: orgId,
+        user_id: connection.target_user_id || null,
+        created_at: connection.created_at,
+        can_open: false,
+      };
+    });
+
+    if (keyword) {
+      mappedClients = mappedClients.filter((client) => {
+        const name = String(client.name || "").toLowerCase();
+        const email = String(client.email || "").toLowerCase();
+        const company = String(client.company_name || "").toLowerCase();
+
+        return (
+          name.includes(keyword) ||
+          email.includes(keyword) ||
+          company.includes(keyword)
+        );
+      });
+    }
+
+    mappedClients.sort((a, b) => {
+      if (a.status === "active" && b.status !== "active") return -1;
+      if (a.status !== "active" && b.status === "active") return 1;
+
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+
+    const total = mappedClients.length;
+    const paginatedClients = mappedClients.slice(from, to + 1);
+
+    setClients(paginatedClients);
+    setTotalClients(total);
     setLoading(false);
   }
 
@@ -103,13 +211,7 @@ export default function AgencyClientsPage() {
     setPage(1);
   }
 
-  function handleClientAdded(newClient) {
-    const normalizedClient = {
-      ...newClient,
-      currency: normalizeCurrency(newClient?.currency),
-    };
-
-    setClients((prev) => [normalizedClient, ...prev]);
+  function handleClientAdded() {
     setShowAddDialog(false);
     setPage(1);
     loadClients();
@@ -203,11 +305,16 @@ export default function AgencyClientsPage() {
           <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
             {clients.map((client) => {
               const currency = normalizeCurrency(client.currency);
+              const CardWrapper = client.can_open ? Link : "div";
 
               return (
-                <div
-                  key={client.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                <CardWrapper
+                  key={`${client.row_type}:${client.id}`}
+                  href={client.can_open ? `/agency/clients/${client.route_id}` : undefined}
+                  className={`block rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition ${client.can_open
+                      ? "hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+                      : "opacity-80"
+                    }`}
                 >
                   <div className="flex items-start gap-3">
                     <div className="flex h-6 w-6 items-center justify-center rounded-2xl bg-blue-600 text-sm uppercase text-white">
@@ -220,6 +327,12 @@ export default function AgencyClientsPage() {
                           <h3 className="truncate font-semibold text-slate-900">
                             {client.name}
                           </h3>
+
+                          {client.status === "pending" && (
+                            <p className="mt-1 text-xs font-medium text-orange-600">
+                              Pending invitation
+                            </p>
+                          )}
                         </div>
 
                         <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
@@ -232,9 +345,7 @@ export default function AgencyClientsPage() {
                   <div className="mt-5 space-y-2 text-sm text-slate-600">
                     <p className="flex items-center gap-2">
                       <Mail size={15} />
-                      <span className="truncate">
-                        {client.email || "No email"}
-                      </span>
+                      <span className="truncate">{client.email || "No email"}</span>
                     </p>
                   </div>
 
@@ -247,7 +358,11 @@ export default function AgencyClientsPage() {
                       Preferred currency: {currency}
                     </p>
                   </div>
-                </div>
+
+                  <p className="mt-4 text-sm font-semibold text-blue-600">
+                    {client.can_open ? "View client details →" : "Waiting for signup"}
+                  </p>
+                </CardWrapper>
               );
             })}
           </div>

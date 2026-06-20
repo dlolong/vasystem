@@ -1,22 +1,34 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Plus, RefreshCw, Send } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import {
+  ClipboardList,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Send,
+} from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAppContext } from "@/context/AppContext";
 
-export default function VaTasksPage() {
+export default function ClientTasksPage() {
+  const searchParams = useSearchParams();
+  const connectionId = searchParams.get("app_connection_id");
+  const openNew = searchParams.get("new") === "1";
+
   const { showToast } = useAppContext();
 
   const [authUser, setAuthUser] = useState(null);
+  const [clientRecord, setClientRecord] = useState(null);
   const [connections, setConnections] = useState([]);
-  const [selectedConnectionId, setSelectedConnectionId] = useState("");
+  const [selectedConnectionId, setSelectedConnectionId] = useState(connectionId || "");
   const [tasks, setTasks] = useState([]);
 
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [showForm, setShowForm] = useState(openNew);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -28,10 +40,10 @@ export default function VaTasksPage() {
   }, []);
 
   useEffect(() => {
-    if (authUser) {
+    if (clientRecord) {
       loadTasks();
     }
-  }, [selectedConnectionId, authUser]);
+  }, [selectedConnectionId, clientRecord]);
 
   async function loadPage() {
     setLoading(true);
@@ -47,38 +59,70 @@ export default function VaTasksPage() {
 
     setAuthUser(user);
 
+    await supabase.rpc("ensure_client_record", {
+      p_name: user.user_metadata?.full_name || user.email,
+      p_currency: "USD",
+    });
+
     await supabase.rpc("claim_app_connections");
 
-    const { data, error } = await supabase
-      .from("app_connections")
-      .select("*")
-      .or(`source_user_id.eq.${user.id},target_user_id.eq.${user.id}`)
-      .in("status", ["active", "pending"])
-      .order("created_at", { ascending: false });
+    const { data: clientRows, error: clientError } = await supabase
+      .from("clients")
+      .select("id, name, email, currency, user_id")
+      .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+      .limit(1);
 
-    if (error) {
-      showToast(error.message, "error");
-      setConnections([]);
+    if (clientError) {
+      showToast(clientError.message, "error");
       setLoading(false);
       return;
     }
 
-    setConnections(data || []);
+    const client = clientRows?.[0] || null;
 
-    if ((data || []).length > 0) {
-      setSelectedConnectionId((data || [])[0].id);
+    if (!client) {
+      setClientRecord(null);
+      setLoading(false);
+      return;
+    }
+
+    setClientRecord(client);
+
+    const loadedConnections = await loadConnections(client.id);
+    setConnections(loadedConnections);
+
+    if (!selectedConnectionId && loadedConnections.length > 0) {
+      setSelectedConnectionId(loadedConnections[0].id);
     }
 
     setLoading(false);
   }
 
+  async function loadConnections(clientId) {
+    const { data, error } = await supabase
+      .from("app_connections")
+      .select("*")
+      .or(`source_client_id.eq.${clientId},target_client_id.eq.${clientId}`)
+      .in("status", ["active", "pending"])
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      showToast(error.message, "error");
+      return [];
+    }
+
+    return data || [];
+  }
+
   async function loadTasks() {
-    if (!authUser?.id) return;
+    if (!clientRecord?.id) return;
 
     let query = supabase
       .from("tasks")
       .select("*")
-      .or(`source_user_id.eq.${authUser.id},assigned_to.eq.${authUser.id}`)
+      .or(
+        `source_client_id.eq.${clientRecord.id},assigned_to_client_id.eq.${clientRecord.id},client_id.eq.${clientRecord.id}`
+      )
       .order("created_at", { ascending: false });
 
     if (selectedConnectionId) {
@@ -108,12 +152,12 @@ export default function VaTasksPage() {
   async function createTask(e) {
     e.preventDefault();
 
-    if (!authUser) return;
+    if (!authUser || !clientRecord) return;
 
     const connection = connections.find((item) => item.id === selectedConnectionId);
 
     if (!connection) {
-      showToast("Please select a connection.", "error");
+      showToast("Please select a VA/provider.", "error");
       return;
     }
 
@@ -122,20 +166,20 @@ export default function VaTasksPage() {
       return;
     }
 
-    const vaIsSource = connection.source_user_id === authUser.id;
-
-    const otherType = vaIsSource ? connection.target_type : connection.source_type;
-    const otherClientId = vaIsSource
-      ? connection.target_client_id
-      : connection.source_client_id;
-    const otherOrgId = vaIsSource
-      ? connection.target_organization_id
-      : connection.source_organization_id;
-    const otherUserId = vaIsSource
-      ? connection.target_user_id
-      : connection.source_user_id;
-
     setSaving(true);
+
+    const providerIsSource = connection.source_type !== "client";
+    const providerUserId = providerIsSource
+      ? connection.source_user_id
+      : connection.target_user_id;
+    const providerOrgId = providerIsSource
+      ? connection.source_organization_id
+      : connection.target_organization_id;
+    const providerEmail = providerIsSource
+      ? null
+      : connection.target_email;
+
+    const assignedToType = providerOrgId ? "agency" : "va";
 
     const { error } = await supabase.from("tasks").insert({
       title: form.title.trim(),
@@ -145,22 +189,19 @@ export default function VaTasksPage() {
 
       app_connection_id: connection.id,
 
-      source_type: "va",
+      source_type: "client",
       source_user_id: authUser.id,
+      source_client_id: clientRecord.id,
+
+      client_id: clientRecord.id,
       created_by: authUser.id,
 
-      assigned_to_type: otherOrgId
-        ? "agency"
-        : otherClientId
-        ? "client"
-        : otherType,
-      assigned_to: otherType === "va" ? otherUserId : null,
-      assigned_to_client_id: otherClientId || null,
-      assigned_to_organization_id: otherOrgId || null,
-
-      client_id: otherClientId || null,
-      organization_id: otherOrgId || null,
-      target_email: connection.target_email || null,
+      assigned_to_type: assignedToType,
+      assigned_to: assignedToType === "va" ? providerUserId : null,
+      assigned_to_organization_id:
+        assignedToType === "agency" ? providerOrgId : null,
+      organization_id: providerOrgId || null,
+      target_email: providerEmail,
     });
 
     if (error) {
@@ -169,7 +210,7 @@ export default function VaTasksPage() {
       return;
     }
 
-    showToast("Task created.", "success");
+    showToast("Task assigned.", "success");
 
     setForm({
       title: "",
@@ -196,8 +237,7 @@ export default function VaTasksPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Tasks</h1>
           <p className="text-sm text-slate-500">
-            View tasks assigned to you and create tasks visible to connected
-            clients or agencies.
+            View and assign tasks to your connected VAs or agencies.
           </p>
         </div>
 
@@ -217,14 +257,14 @@ export default function VaTasksPage() {
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
           >
             <Plus size={16} />
-            Create Task
+            Assign Task
           </button>
         </div>
       </div>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <label className="mb-2 block text-sm font-semibold text-slate-700">
-          Connection
+          VA / Provider
         </label>
 
         <select
@@ -232,7 +272,7 @@ export default function VaTasksPage() {
           onChange={(e) => setSelectedConnectionId(e.target.value)}
           className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
         >
-          <option value="">All connections</option>
+          <option value="">All providers</option>
 
           {connections.map((connection) => (
             <option key={connection.id} value={connection.id}>
@@ -248,10 +288,10 @@ export default function VaTasksPage() {
           <form onSubmit={createTask} className="space-y-4">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">
-                Create New Task
+                Assign New Task
               </h2>
               <p className="text-sm text-slate-500">
-                Visible to: {selectedConnection?.target_email || "Selected connection"}
+                Assigned to: {selectedConnection?.target_email || "Selected provider"}
               </p>
             </div>
 
